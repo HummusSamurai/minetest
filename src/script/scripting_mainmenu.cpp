@@ -1,45 +1,36 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "scripting_mainmenu.h"
-#include "content/mods.h"
 #include "cpp_api/s_internal.h"
 #include "lua_api/l_base.h"
 #include "lua_api/l_http.h"
 #include "lua_api/l_mainmenu.h"
-#include "lua_api/l_sound.h"
+#include "lua_api/l_mainmenu_sound.h"
+#include "lua_api/l_menu_common.h"
 #include "lua_api/l_util.h"
 #include "lua_api/l_settings.h"
 #include "log.h"
+#include "filesys.h"
+#include "porting.h"
 
 extern "C" {
 #include "lualib.h"
 }
-#define MAINMENU_NUM_ASYNC_THREADS 4
+
+#define MAINMENU_NUM_ASYNC_THREADS 2
 
 
 MainMenuScripting::MainMenuScripting(GUIEngine* guiengine):
-		ScriptApiBase(ScriptingType::MainMenu)
+		ScriptApiBase(ScriptingType::MainMenu),
+		ScriptApiAsync()
 {
 	setGuiEngine(guiengine);
 
 	SCRIPTAPI_PRECHECKHEADER
+
+	initializeSecurity();
 
 	lua_getglobal(L, "core");
 	int top = lua_gettop(L);
@@ -56,45 +47,69 @@ MainMenuScripting::MainMenuScripting(GUIEngine* guiengine):
 	lua_setglobal(L, "INIT");
 
 	infostream << "SCRIPTAPI: Initialized main menu modules" << std::endl;
+
+	// Initialize async environment
+	asyncEngine.initialize(MAINMENU_NUM_ASYNC_THREADS, "async", true);
 }
 
-/******************************************************************************/
 void MainMenuScripting::initializeModApi(lua_State *L, int top)
 {
 	registerLuaClasses(L, top);
 
 	// Initialize mod API modules
+	ModApiMenuCommon::Initialize(L, top);
 	ModApiMainMenu::Initialize(L, top);
 	ModApiUtil::Initialize(L, top);
-	ModApiSound::Initialize(L, top);
+	ModApiMainMenuSound::Initialize(L, top);
 	ModApiHttp::Initialize(L, top);
 
 	asyncEngine.registerStateInitializer(registerLuaClasses);
+	asyncEngine.registerStateInitializer(ModApiMenuCommon::InitializeAsync);
 	asyncEngine.registerStateInitializer(ModApiMainMenu::InitializeAsync);
 	asyncEngine.registerStateInitializer(ModApiUtil::InitializeAsync);
 	asyncEngine.registerStateInitializer(ModApiHttp::InitializeAsync);
-
-	// Initialize async environment
-	//TODO possibly make number of async threads configurable
-	asyncEngine.initialize(MAINMENU_NUM_ASYNC_THREADS);
 }
 
-/******************************************************************************/
 void MainMenuScripting::registerLuaClasses(lua_State *L, int top)
 {
 	LuaSettings::Register(L);
+	MainMenuSoundHandle::Register(L);
 }
 
-/******************************************************************************/
-void MainMenuScripting::step()
+#define RET_IF_STARTS_WITH(expr, ret) do { \
+	if (std::string p = (expr); !p.empty() && fs::PathStartsWith(path, p)) \
+		return (ret); \
+	} while (0)
+#define REJECT_PATH(expr) RET_IF_STARTS_WITH(expr, false)
+#define ALLOW_PATH(expr) RET_IF_STARTS_WITH(expr, true)
+
+bool MainMenuScripting::mayModifyPath(const std::string &path)
 {
-	asyncEngine.step(getStack());
+	// Safeguard: user and share paths can be equal, so exclude these explicitly.
+	REJECT_PATH(fs::AbsolutePath(porting::path_share + DIR_DELIM "bin")); // binary folder (on windows)
+	REJECT_PATH(fs::AbsolutePath(porting::path_share + DIR_DELIM "builtin"));
+
+	ALLOW_PATH(fs::AbsolutePathPartial(fs::TempPath()));
+	ALLOW_PATH(fs::AbsolutePathPartial(porting::path_user));
+	ALLOW_PATH(fs::AbsolutePathPartial(porting::path_cache));
+
+	return false;
 }
 
-/******************************************************************************/
-unsigned int MainMenuScripting::queueAsync(const std::string &serialized_func,
-		const std::string &serialized_param)
+bool MainMenuScripting::checkPathInternal(const std::string &abs_path, bool write_required,
+	bool *write_allowed)
 {
-	return asyncEngine.queueAsyncJob(serialized_func, serialized_param);
+	if (mayModifyPath(abs_path)) {
+		if (write_allowed)
+			*write_allowed = true;
+		return true;
+	}
+	// TODO?: global read access sounds too broad
+	return !write_required;
 }
 
+void MainMenuScripting::reportAsyncError(const std::string &msg)
+{
+	// TODO: display error in GUIEngine or exit?
+	errorstream << msg << std::endl;
+}

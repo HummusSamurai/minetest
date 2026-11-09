@@ -33,7 +33,7 @@ end)
 core.after(1, function()
 	print("armor: " .. dump(core.localplayer:get_armor_groups()))
 	id = core.localplayer:hud_add({
-			hud_elem_type = "text",
+			type = "text",
 			name = "example",
 			number = 0xff0000,
 			position = {x=0, y=1},
@@ -165,6 +165,9 @@ core.after(5, function()
 
 	print("[PREVIEW] Find node near: " .. dump(core.find_node_near({x=0, y=20, z=0}, 10,
 		{"group:tree", "default:dirt", "default:stone"})))
+
+	print("[PREVIEW] Settings: preview_csm_test_setting = " ..
+		tostring(core.settings:get_bool("preview_csm_test_setting", false)))
 end)
 
 core.register_on_dignode(function(pos, node)
@@ -187,7 +190,7 @@ end)
 
 core.register_chatcommand("privs", {
 	func = function(param)
-		return true, core.privs_to_string(minetest.get_privilege_list())
+		return true, core.privs_to_string(core.get_privilege_list())
 	end,
 })
 
@@ -201,3 +204,36 @@ core.register_chatcommand("text", {
 core.register_on_mods_loaded(function()
 	core.log("Yeah preview mod is loaded with other CSM mods.")
 end)
+
+
+-- Test commands
+
+local id_list = {}
+core.register_chatcommand("test_hud", {
+	func = function(param)
+		if param == "list" then
+			print(dump(core.localplayer:hud_get_all()))
+			return true, "See stdout"
+		elseif param == "add" then
+			local n = math.random(5) + 1
+			for i = 1, n do
+				id_list[#id_list + 1] = core.localplayer:hud_add({
+					type = "text",
+					position = {x=math.random(), y=math.random()},
+					name = "lab:" .. math.random(999),
+					text = math.random(999999)
+				})
+			end
+			return true, "Added " .. n .. " elements"
+		elseif param == "clear" then
+			local n = #id_list
+			for _, id in ipairs(id_list) do
+				assert(core.localplayer:hud_remove(id))
+			end
+			id_list = {}
+			return true, "Removed " .. n .. " elements"
+		end
+
+		return false, "Unknown command?"
+	end
+})

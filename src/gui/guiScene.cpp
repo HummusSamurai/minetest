@@ -1,31 +1,24 @@
-/*
-Minetest
-Copyright (C) 2020 Jean-Patrick Guerrero <jeanpatrick.guerrero@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2020 Jean-Patrick Guerrero <jeanpatrick.guerrero@gmail.com>
 
 #include "guiScene.h"
 
 #include <SViewFrustum.h>
-#include <IAnimatedMeshSceneNode.h>
-#include <ILightSceneNode.h>
+#include <AnimatedMeshSceneNode.h>
+#include <IVideoDriver.h>
+#include <ISceneManager.h>
+#include "client/shader.h"
+#include "nodedef.h"
 #include "porting.h"
+#include "client/mesh.h"
 
-GUIScene::GUIScene(gui::IGUIEnvironment *env, scene::ISceneManager *smgr,
-		   gui::IGUIElement *parent, core::recti rect, s32 id)
+GUIScene::GUIScene(gui::IGUIEnvironment *env,
+		scene::ISceneManager *smgr,
+		gui::IGUIElement *parent,
+		IShaderSource *shdsrc,
+		core::recti rect,
+		s32 id)
 	: IGUIElement(gui::EGUIET_ELEMENT, env, parent, id, rect)
 {
 	m_driver = env->getVideoDriver();
@@ -34,7 +27,10 @@ GUIScene::GUIScene(gui::IGUIEnvironment *env, scene::ISceneManager *smgr,
 	m_cam = m_smgr->addCameraSceneNode(0, v3f(0.f, 0.f, -100.f), v3f(0.f));
 	m_cam->setFOV(30.f * core::DEGTORAD);
 
-	m_smgr->getParameters()->setAttribute(scene::ALLOW_ZWRITE_ON_TRANSPARENT, true);
+	ShaderFeatures features;
+	features.skinning = true;
+	u32 shader_id = shdsrc->getShaderRaw("fs_model_shader", true, features);
+	m_material_type = shdsrc->getShaderInfo(shader_id).material;
 }
 
 GUIScene::~GUIScene()
@@ -44,7 +40,7 @@ GUIScene::~GUIScene()
 	m_smgr->drop();
 }
 
-scene::IAnimatedMeshSceneNode *GUIScene::setMesh(scene::IAnimatedMesh *mesh)
+scene::AnimatedMeshSceneNode *GUIScene::setMesh(scene::IAnimatedMesh *mesh)
 {
 	if (m_mesh) {
 		m_mesh->remove();
@@ -64,14 +60,13 @@ scene::IAnimatedMeshSceneNode *GUIScene::setMesh(scene::IAnimatedMesh *mesh)
 void GUIScene::setTexture(u32 idx, video::ITexture *texture)
 {
 	video::SMaterial &material = m_mesh->getMaterial(idx);
-	material.MaterialType = video::EMT_TRANSPARENT_ALPHA_CHANNEL;
-	material.MaterialTypeParam = 0.5f;
-	material.TextureLayer[0].Texture = texture;
-	material.setFlag(video::EMF_LIGHTING, false);
-	material.setFlag(video::EMF_FOG_ENABLE, true);
-	material.setFlag(video::EMF_BILINEAR_FILTER, false);
-	material.setFlag(video::EMF_BACK_FACE_CULLING, false);
-	material.setFlag(video::EMF_ZWRITE_ENABLE, true);
+	material.MaterialType = m_material_type;
+	material.TextureLayers[0].Texture = texture;
+	material.FogEnable = false;
+	material.TextureLayers[0].MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+	material.TextureLayers[0].MagFilter = video::ETMAGF_NEAREST;
+	material.BackfaceCulling = false;
+	material.ZWriteEnable = video::EZW_AUTO;
 }
 
 void GUIScene::draw()
@@ -87,9 +82,10 @@ void GUIScene::draw()
 
 	core::rect<s32> oldViewPort = m_driver->getViewPort();
 	m_driver->setViewPort(getAbsoluteClippingRect());
-	core::recti borderRect = Environment->getRootGUIElement()->getAbsoluteClippingRect();
 
 	if (m_bgcolor != 0) {
+		core::recti borderRect =
+				Environment->getRootGUIElement()->getAbsoluteClippingRect();
 		Environment->getSkin()->draw3DSunkenPane(
 			this, m_bgcolor, false, true, borderRect, 0);
 	}
@@ -103,13 +99,9 @@ void GUIScene::draw()
 		m_cam->bindTargetAndRotation(true);
 	}
 
-	cameraLoop();
-
 	// Continuous rotation
 	if (m_inf_rot)
 		rotateCamera(v3f(0.f, -0.03f * (float)dtime_ms, 0.f));
-
-	m_smgr->drawAll();
 
 	if (m_initial_rotation && m_mesh) {
 		rotateCamera(v3f(m_custom_rot.X, m_custom_rot.Y, 0.f));
@@ -117,6 +109,9 @@ void GUIScene::draw()
 
 		m_initial_rotation = false;
 	}
+
+	cameraLoop();
+	m_smgr->drawAll();
 
 	m_driver->setViewPort(oldViewPort);
 }
@@ -156,18 +151,20 @@ void GUIScene::setStyles(const std::array<StyleSpec, StyleSpec::NUM_STATES> &sty
 /**
  * Sets the frame loop range for the mesh
  */
-void GUIScene::setFrameLoop(s32 begin, s32 end)
+void GUIScene::setFrameLoop(f32 begin, f32 end)
 {
-	if (m_mesh->getStartFrame() != begin || m_mesh->getEndFrame() != end)
-		m_mesh->setFrameLoop(begin, end);
+	auto &anim = m_mesh->getAnimation().tracks[0];
+	anim.setFrameRange(begin, end);
+	anim.cur_frame = anim.fps >= 0 ? begin : end;
 }
 
 /**
  * Sets the animation speed (FPS) for the mesh
+ * @note setFrameLoop() must be called before this
  */
 void GUIScene::setAnimationSpeed(f32 speed)
 {
-	m_mesh->setAnimationSpeed(speed);
+	m_mesh->getAnimation().tracks.at(0).fps = speed;
 }
 
 /* Camera control functions */
@@ -180,6 +177,7 @@ inline void GUIScene::calcOptimalDistance()
 	f32 depth  = box.MaxEdge.Z - box.MinEdge.Z;
 	f32 max_width = width > depth ? width : depth;
 
+	m_cam->updateMatrices(); // Updates the frustum
 	const scene::SViewFrustum *f = m_cam->getViewFrustum();
 	f32 cam_far = m_cam->getFarValue();
 	f32 far_width = core::line3df(f->getFarLeftUp(), f->getFarRightUp()).getLength();
@@ -224,8 +222,7 @@ void GUIScene::setCameraRotation(v3f rot)
 	core::matrix4 mat;
 	mat.setRotationDegrees(rot);
 
-	m_cam_pos = v3f(0.f, 0.f, m_cam_distance);
-	mat.rotateVect(m_cam_pos);
+	m_cam_pos = mat.rotateAndScaleVect(v3f(0.f, 0.f, m_cam_distance));
 
 	m_cam_pos += m_target_pos;
 	m_cam->setPosition(m_cam_pos);

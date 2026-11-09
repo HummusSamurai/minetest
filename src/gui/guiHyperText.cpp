@@ -1,47 +1,31 @@
-/*
-Minetest
-Copyright (C) 2019 EvicenceBKidscode / Pierre-Yves Rollo <dev@pyrollo.com>
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2019 EvicenceBKidscode / Pierre-Yves Rollo <dev@pyrollo.com>
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
-
-#include "IGUIEnvironment.h"
-#include "IGUIElement.h"
+#include "guiHyperText.h"
 #include "guiScrollBar.h"
-#include "IGUIFont.h"
-#include <vector>
-#include <list>
-#include <unordered_map>
-using namespace irr::gui;
 #include "client/fontengine.h"
-#include <SColor.h>
-#include "client/tile.h"
+#include "drawItemStack.h"
 #include "IVideoDriver.h"
 #include "client/client.h"
+#include "client/guiscalingfilter.h"
 #include "client/renderingengine.h"
-#include "hud.h"
-#include "guiHyperText.h"
+#include "client/texturesource.h"
+#include "inventory.h"
 #include "util/string.h"
+#include "irrlicht_changes/CGUITTFont.h"
+#include "mainmenumanager.h"
+#include "porting.h"
 
-bool check_color(const std::string &str)
+using namespace gui;
+
+static bool check_color(const std::string &str)
 {
-	irr::video::SColor color;
+	video::SColor color;
 	return parseColorString(str, color, false);
 }
 
-bool check_integer(const std::string &str)
+static bool check_integer(const std::string &str)
 {
 	if (str.empty())
 		return false;
@@ -67,9 +51,15 @@ void ParsedText::Element::setStyle(StyleList &style)
 		this->hovercolor = color;
 
 	unsigned int font_size = std::atoi(style["fontsize"].c_str());
+
 	FontMode font_mode = FM_Standard;
 	if (style["fontstyle"] == "mono")
 		font_mode = FM_Mono;
+
+	// hypertext[] only accepts absolute font size values and has a hardcoded
+	// default font size of 16. This is the only way to make hypertext[]
+	// respect font size settings that I can think of.
+	font_size = myround(font_size / 16.0f * g_fontengine->getFontSize(font_mode));
 
 	FontSpec spec(font_size, font_mode,
 		is_yes(style["bold"]), is_yes(style["italic"]));
@@ -78,10 +68,11 @@ void ParsedText::Element::setStyle(StyleList &style)
 	// Build a new fontengine ?
 	this->font = g_fontengine->getFont(spec);
 
-	if (!this->font)
-		printf("No font found ! Size=%d, mode=%d, bold=%s, italic=%s\n",
-				font_size, font_mode, style["bold"].c_str(),
-				style["italic"].c_str());
+	if (!this->font) {
+		infostream << "No font found! size=" << font_size << ", mode="
+			<< font_mode << ", bold=" << style["bold"] << ", italic="
+			<< style["italic"] << std::endl;
+	}
 }
 
 void ParsedText::Paragraph::setStyle(StyleList &style)
@@ -96,7 +87,7 @@ void ParsedText::Paragraph::setStyle(StyleList &style)
 		this->halign = HALIGN_LEFT;
 }
 
-ParsedText::ParsedText(const wchar_t *text)
+ParsedText::ParsedText(const wchar_t *text, video::SColor default_color = video::SColor(255,255,255,255))
 {
 	// Default style
 	m_root_tag.name = "root";
@@ -106,7 +97,7 @@ ParsedText::ParsedText(const wchar_t *text)
 	m_root_tag.style["italic"] = "false";
 	m_root_tag.style["underline"] = "false";
 	m_root_tag.style["halign"] = "left";
-	m_root_tag.style["color"] = "#EEEEEE";
+	m_root_tag.style["color"] = encodeHexColorString(default_color);
 	m_root_tag.style["hovercolor"] = "#FF0000";
 
 	m_active_tags.push_front(&m_root_tag);
@@ -290,8 +281,8 @@ void ParsedText::pushChar(wchar_t c)
 		else
 			return;
 	} else {
-		m_empty_paragraph = false;
 		enterElement(ELEMENT_TEXT);
+		m_empty_paragraph = false;
 	}
 	m_element->text += c;
 }
@@ -369,7 +360,7 @@ void ParsedText::globalTag(const AttrsList &attrs)
 			else if (attr.second == "middle")
 				valign = ParsedText::VALIGN_MIDDLE;
 		} else if (attr.first == "background") {
-			irr::video::SColor color;
+			video::SColor color;
 			if (attr.second == "none") {
 				background_type = BACKGROUND_NONE;
 			} else if (parseColorString(attr.second, color, false)) {
@@ -397,15 +388,15 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 {
 	// Tag name
 	bool end = false;
-	std::string name = "";
+	std::string name;
 	wchar_t c = text[cursor];
 
 	if (c == L'/') {
 		end = true;
 		c = text[++cursor];
-		if (c == L'\0')
-			return 0;
 	}
+	if (c == L'\0')
+		return 0;
 
 	while (c != ' ' && c != '>') {
 		name += c;
@@ -418,14 +409,16 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 	AttrsList attrs;
 	while (c != L'>') {
 		std::string attr_name = "";
-		core::stringw attr_val = L"";
+		std::wstring attr_val = L"";
 
+		// Consume whitespace
 		while (c == ' ') {
 			c = text[++cursor];
 			if (c == L'\0' || c == L'=')
 				return 0;
 		}
 
+		// Read attribute name
 		while (c != L' ' && c != L'=') {
 			attr_name += (char)c;
 			c = text[++cursor];
@@ -433,34 +426,56 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 				return 0;
 		}
 
+		// Consume whitespace
 		while (c == L' ') {
 			c = text[++cursor];
 			if (c == L'\0' || c == L'>')
 				return 0;
 		}
 
+		// Skip equals
 		if (c != L'=')
 			return 0;
-
 		c = text[++cursor];
-
 		if (c == L'\0')
 			return 0;
 
-		while (c != L'>' && c != L' ') {
-			attr_val += c;
+		// Read optional quote
+		wchar_t quote_used = 0;
+		if (c == L'"' || c == L'\'') {
+			quote_used = c;
 			c = text[++cursor];
 			if (c == L'\0')
 				return 0;
 		}
 
-		attrs[attr_name] = stringw_to_utf8(attr_val);
+		// Read attribute value
+		bool escape = false;
+		while (escape || (quote_used && c != quote_used) || (!quote_used && c != L'>' && c != L' ')) {
+			if (quote_used && !escape && c == L'\\') {
+				escape = true;
+			} else {
+				escape = false;
+				attr_val += c;
+			}
+			c = text[++cursor];
+			if (c == L'\0')
+				return 0;
+		}
+
+		// Remove quote
+		if (quote_used) {
+			if (c != quote_used)
+				return 0;
+			c = text[++cursor];
+		}
+
+		attrs[attr_name] = wide_to_utf8(attr_val);
 	}
 
 	++cursor; // Last ">"
 
 	// Tag specific processing
-	StyleList style;
 
 	if (name == "global") {
 		if (end)
@@ -471,8 +486,9 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 		if (end) {
 			closeTag(name);
 		} else {
+			StyleList style;
 			parseStyles(attrs, style);
-			openTag(name, attrs)->style = style;
+			openTag(name, attrs)->style = std::move(style);
 		}
 		endElement();
 	} else if (name == "img" || name == "item") {
@@ -570,6 +586,7 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 				return 0;
 			openTag(name, attrs)->style = m_elementtags["action"];
 		}
+		endElement();
 
 	} else if (m_elementtags.count(name)) {
 		if (end) {
@@ -603,9 +620,11 @@ u32 ParsedText::parseTag(const wchar_t *text, u32 cursor)
 // Text Drawer
 
 TextDrawer::TextDrawer(const wchar_t *text, Client *client,
-		gui::IGUIEnvironment *environment, ISimpleTextureSource *tsrc) :
-		m_text(text),
-		m_client(client), m_environment(environment)
+		gui::IGUIEnvironment *environment, ISimpleTextureSource *tsrc,
+		video::SColor default_background_color,
+		video::SColor default_color) :
+		m_text(text, default_color), m_client(client), m_tsrc(tsrc), m_guienv(environment),
+		m_default_background_color(default_background_color)
 {
 	// Size all elements
 	for (auto &p : m_text.m_paragraphs) {
@@ -616,12 +635,10 @@ TextDrawer::TextDrawer(const wchar_t *text, Client *client,
 				if (e.font) {
 					e.dim.Width = e.font->getDimension(e.text.c_str()).Width;
 					e.dim.Height = e.font->getDimension(L"Yy").Height;
-#if USE_FREETYPE
-					if (e.font->getType() == irr::gui::EGFT_CUSTOM) {
-						e.baseline = e.dim.Height - 1 -
-							((irr::gui::CGUITTFont *)e.font)->getAscender() / 64;
+					if (e.font->getType() == gui::EGFT_CUSTOM) {
+						CGUITTFont *tmp = static_cast<CGUITTFont*>(e.font);
+						e.baseline = e.dim.Height - 1 - tmp->getAscender() / 64;
 					}
-#endif
 				} else {
 					e.dim = {0, 0};
 				}
@@ -638,7 +655,7 @@ TextDrawer::TextDrawer(const wchar_t *text, Client *client,
 
 				if (e.type == ParsedText::ELEMENT_IMAGE) {
 					video::ITexture *texture =
-						m_client->getTextureSource()->
+						m_tsrc->
 							getTexture(stringw_to_utf8(e.text));
 					if (texture)
 						dim = texture->getOriginalSize();
@@ -687,6 +704,7 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 	m_floating.clear();
 	s32 y = 0;
 	s32 ymargin = m_text.margin;
+	bool first_paragraph = true;
 
 	// Iterator used :
 	// p - Current paragraph, walked only once
@@ -697,7 +715,7 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 		// Find and place floating stuff in paragraph
 		for (auto e = p.elements.begin(); e != p.elements.end(); ++e) {
 			if (e->floating != ParsedText::FLOAT_NONE) {
-				if (y)
+				if (!first_paragraph)
 					e->pos.Y = y + std::max(ymargin, e->margin);
 				else
 					e->pos.Y = ymargin;
@@ -716,13 +734,15 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 			}
 		}
 
-		if (y)
+		if (!first_paragraph)
 			y = y + std::max(ymargin, p.margin);
+		else
+			y = y + ymargin;
 
 		ymargin = p.margin;
 
 		// Place non floating stuff
-		std::vector<ParsedText::Element>::iterator el = p.elements.begin();
+		auto el = p.elements.begin();
 
 		while (el != p.elements.end()) {
 			// Determine line width and y pos
@@ -765,7 +785,7 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 										std::max(f.margin, p.margin);
 
 						} else if (f.rect.UpperLeftCorner.X - f.margin <= left &&
-							 	f.rect.LowerRightCorner.X + f.margin >= right) {
+								f.rect.LowerRightCorner.X + f.margin >= right) {
 							// float taking all space
 							left = right;
 						}
@@ -783,7 +803,7 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 			u32 charswidth = 0;
 			u32 wordcount = 0;
 
-			// Skip begining of line separators but include them in height
+			// Skip beginning of line separators but include them in height
 			// computation.
 			while (el != p.elements.end() &&
 					el->type == ParsedText::ELEMENT_SEPARATOR) {
@@ -795,8 +815,8 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 				el++;
 			}
 
-			std::vector<ParsedText::Element>::iterator linestart = el;
-			std::vector<ParsedText::Element>::iterator lineend = p.elements.end();
+			auto linestart = el;
+			auto lineend = p.elements.end();
 
 			// First pass, find elements fitting into line
 			// (or at least one element)
@@ -889,6 +909,8 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 			}
 			y += charsheight;
 		} // Elements (actually lines)
+
+		first_paragraph = false;
 	} // Paragraph
 
 	// Check if float goes under paragraph
@@ -915,17 +937,48 @@ void TextDrawer::place(const core::rect<s32> &dest_rect)
 		m_voffset = 0;
 }
 
+void TextDrawer::drawBackgroundImage(
+		video::IVideoDriver *driver, const core::rect<s32> &clip_rect)
+{
+	auto size = m_text.background_image->getOriginalSize();
+
+	if (m_text.background_middle.getArea() > 0) {
+		draw2DImage9Slice(driver, m_text.background_image, clip_rect,
+				core::rect<s32>(0, 0, size.Width, size.Height), m_text.background_middle);
+	} else {
+		const video::SColor color(255, 255, 255, 255);
+		const video::SColor colors[] = {color, color, color, color};
+
+		draw2DImageFilterScaled(driver, m_text.background_image, clip_rect,
+				core::rect<s32>(0, 0, size.Width, size.Height), nullptr, colors, true);
+	}
+}
+
 // Draw text in a rectangle with a given offset. Items are actually placed in
 // relative (to upper left corner) coordinates.
 void TextDrawer::draw(const core::rect<s32> &clip_rect,
 		const core::position2d<s32> &dest_offset)
 {
-	irr::video::IVideoDriver *driver = m_environment->getVideoDriver();
+	video::IVideoDriver *driver = m_guienv->getVideoDriver();
 	core::position2d<s32> offset = dest_offset;
 	offset.Y += m_voffset;
 
 	if (m_text.background_type == ParsedText::BACKGROUND_COLOR)
 		driver->draw2DRectangle(m_text.background_color, clip_rect);
+
+	if (m_text.border) {
+		const video::SColor color(255,0,0,0);
+		const auto &UpperLeft = clip_rect.UpperLeftCorner;
+		const auto &LowerRight = clip_rect.LowerRightCorner;
+
+		driver->draw2DLine(UpperLeft, core::position2di(LowerRight.X, UpperLeft.Y), color);
+		driver->draw2DLine(core::position2di(LowerRight.X, UpperLeft.Y), LowerRight, color);
+		driver->draw2DLine(LowerRight, core::position2di(UpperLeft.X, LowerRight.Y), color);
+		driver->draw2DLine(core::position2di(UpperLeft.X, LowerRight.Y), UpperLeft, color);
+	}
+
+	if (m_text.background_image)
+		drawBackgroundImage(driver, clip_rect);
 
 	for (auto &p : m_text.m_paragraphs) {
 		for (auto &el : p.elements) {
@@ -936,7 +989,7 @@ void TextDrawer::draw(const core::rect<s32> &clip_rect,
 			switch (el.type) {
 			case ParsedText::ELEMENT_SEPARATOR:
 			case ParsedText::ELEMENT_TEXT: {
-				irr::video::SColor color = el.color;
+				video::SColor color = el.color;
 
 				for (auto tag : el.tags)
 					if (&(*tag) == m_hovertag)
@@ -964,60 +1017,77 @@ void TextDrawer::draw(const core::rect<s32> &clip_rect,
 
 			case ParsedText::ELEMENT_IMAGE: {
 				video::ITexture *texture =
-						m_client->getTextureSource()->getTexture(
+						m_tsrc->getTexture(
 								stringw_to_utf8(el.text));
 				if (texture != 0)
-					m_environment->getVideoDriver()->draw2DImage(
+					driver->draw2DImage(
 							texture, rect,
-							irr::core::rect<s32>(
+							core::rect<s32>(
 									core::position2d<s32>(0, 0),
 									texture->getOriginalSize()),
 							&clip_rect, 0, true);
 			} break;
 
 			case ParsedText::ELEMENT_ITEM: {
-				IItemDefManager *idef = m_client->idef();
-				ItemStack item;
-				item.deSerialize(stringw_to_utf8(el.text), idef);
+				if (m_client) {
+					auto *idef = m_client->idef();
+					ItemStack item;
+					item.deSerialize(stringw_to_utf8(el.text), idef);
 
-				drawItemStack(
-						m_environment->getVideoDriver(),
-						g_fontengine->getFont(), item, rect, &clip_rect,
-						m_client, IT_ROT_OTHER, el.angle, el.rotation
-				);
+					drawItemStack(driver,
+							g_fontengine->getFont(), item, rect, &clip_rect, m_client,
+							IT_ROT_OTHER, el.angle, el.rotation);
+				}
 			} break;
 			}
 		}
 	}
 }
 
+void TextDrawer::applyStyleSpecToText(const StyleSpec &style)
+{
+	m_text.background_middle = style.getRect(StyleSpec::BGIMG_MIDDLE, core::rect<s32>());
+	m_text.border = style.getBool(StyleSpec::BORDER, true);
+
+	if (m_text.background_type != m_text.BackgroundType::BACKGROUND_COLOR) {
+		m_text.background_type = m_text.BackgroundType::BACKGROUND_COLOR;
+		m_text.background_color = style.getColor(StyleSpec::BGCOLOR, m_default_background_color);
+	}
+
+	if (style.isNotDefault(StyleSpec::BGIMG))
+		m_text.background_image = style.getTexture(StyleSpec::BGIMG, m_tsrc);
+}
+
 // -----------------------------------------------------------------------------
-// GUIHyperText - The formated text area formspec item
+// GUIHyperText - The formatted text area formspec item
 
 //! constructor
 GUIHyperText::GUIHyperText(const wchar_t *text, IGUIEnvironment *environment,
 		IGUIElement *parent, s32 id, const core::rect<s32> &rectangle,
-		Client *client, ISimpleTextureSource *tsrc) :
+		Client *client, ISimpleTextureSource *tsrc,
+		video::SColor default_background_color,
+		video::SColor default_color,
+		bool is_hypertip) :
 		IGUIElement(EGUIET_ELEMENT, environment, parent, id, rectangle),
-		m_client(client), m_vscrollbar(nullptr),
-		m_drawer(text, client, environment, tsrc), m_text_scrollpos(0, 0)
+		m_tsrc(tsrc), m_vscrollbar(nullptr),
+		m_drawer(text, client, environment, tsrc, default_background_color, default_color),
+		m_text_scrollpos(0, 0),
+		m_draw_state(is_hypertip ? 0 : 2), // disable delay hack for non-hypertip hypertext
+		m_default_background_color(default_background_color),
+		m_default_color(default_color)
 {
 
-#ifdef _DEBUG
-	setDebugName("GUIHyperText");
-#endif
-
-	IGUISkin *skin = 0;
+	IGUISkin *skin = nullptr;
 	if (Environment)
 		skin = Environment->getSkin();
 
 	m_scrollbar_width = skin ? skin->getSize(gui::EGDS_SCROLLBAR_SIZE) : 16;
 
-	core::rect<s32> rect = irr::core::rect<s32>(
+	core::rect<s32> rect = core::rect<s32>(
 			RelativeRect.getWidth() - m_scrollbar_width, 0,
 			RelativeRect.getWidth(), RelativeRect.getHeight());
 
-	m_vscrollbar = new GUIScrollBar(Environment, this, -1, rect, false, true);
+	m_vscrollbar = new GUIScrollBar(Environment, this, -1, rect, false, tsrc);
 	m_vscrollbar->setVisible(false);
 }
 
@@ -1053,14 +1123,19 @@ void GUIHyperText::checkHover(s32 X, s32 Y)
 		}
 	}
 
-#ifndef HAVE_TOUCHSCREENGUI
-	if (m_drawer.m_hovertag)
-		RenderingEngine::get_raw_device()->getCursorControl()->setActiveIcon(
-				gui::ECI_HAND);
-	else
-		RenderingEngine::get_raw_device()->getCursorControl()->setActiveIcon(
-				gui::ECI_NORMAL);
-#endif
+	ICursorControl *cursor_control = RenderingEngine::get_raw_device()->getCursorControl();
+
+	if (cursor_control)
+		cursor_control->setActiveIcon(m_drawer.m_hovertag ? gui::ECI_HAND : gui::ECI_NORMAL);
+}
+
+void GUIHyperText::setStyles(const std::array<StyleSpec, StyleSpec::NUM_STATES> &styles)
+{
+	StyleSpec::State state = StyleSpec::STATE_DEFAULT;
+	StyleSpec style = StyleSpec::getStyleFromStatePropagation(styles, state);
+
+	setNotClipped(style.getBool(StyleSpec::NOCLIP, true));
+	m_drawer.applyStyleSpecToText(style);
 }
 
 bool GUIHyperText::OnEvent(const SEvent &event)
@@ -1076,12 +1151,11 @@ bool GUIHyperText::OnEvent(const SEvent &event)
 	if (event.EventType == EET_GUI_EVENT &&
 			event.GUIEvent.EventType == EGET_ELEMENT_LEFT) {
 		m_drawer.m_hovertag = nullptr;
-#ifndef HAVE_TOUCHSCREENGUI
-		gui::ICursorControl *cursor_control =
-				RenderingEngine::get_raw_device()->getCursorControl();
-		if (cursor_control->isVisible())
+
+		ICursorControl *cursor_control = RenderingEngine::get_raw_device()->getCursorControl();
+
+		if (cursor_control && cursor_control->isVisible())
 			cursor_control->setActiveIcon(gui::ECI_NORMAL);
-#endif
 	}
 
 	if (event.EventType == EET_MOUSE_INPUT_EVENT) {
@@ -1089,7 +1163,7 @@ bool GUIHyperText::OnEvent(const SEvent &event)
 			checkHover(event.MouseInput.X, event.MouseInput.Y);
 
 		if (event.MouseInput.Event == EMIE_MOUSE_WHEEL && m_vscrollbar->isVisible()) {
-			m_vscrollbar->setPos(m_vscrollbar->getPos() -
+			m_vscrollbar->setPosInterpolated(m_vscrollbar->getTargetPos() -
 					event.MouseInput.Wheel * m_vscrollbar->getSmallStep());
 			m_text_scrollpos.Y = -m_vscrollbar->getPos();
 			m_drawer.draw(m_display_text_rect, m_text_scrollpos);
@@ -1113,7 +1187,19 @@ bool GUIHyperText::OnEvent(const SEvent &event)
 							newEvent.GUIEvent.EventType = EGET_BUTTON_CLICKED;
 							Parent->OnEvent(newEvent);
 						}
-						break;
+
+						auto url_it = tag->attrs.find("url");
+						if (url_it != tag->attrs.end()) {
+							if (g_gamecallback) {
+								// in game
+								g_gamecallback->showOpenURLDialog(url_it->second);
+							} else {
+								// main menu
+								porting::open_url(url_it->second);
+							}
+						}
+
+						return true;
 					}
 				}
 			}
@@ -1133,8 +1219,16 @@ void GUIHyperText::draw()
 	m_display_text_rect = AbsoluteRect;
 	m_drawer.place(m_display_text_rect);
 
-	// Show scrollbar if text overflow
+	// Show a scrollbar if the text overflows vertically
 	if (m_drawer.getHeight() > m_display_text_rect.getHeight()) {
+		// Showing a scrollbar will reduce the width of the viewport, causing
+		// more text to be wrapped and thus increasing the height of the text.
+		// Therefore, we have to re-layout the text *before* setting the height
+		// of the scrollbar.
+		core::rect<s32> smaller_rect = m_display_text_rect;
+		smaller_rect.LowerRightCorner.X -= m_scrollbar_width;
+		m_drawer.place(smaller_rect);
+
 		m_vscrollbar->setSmallStep(m_display_text_rect.getHeight() * 0.1f);
 		m_vscrollbar->setLargeStep(m_display_text_rect.getHeight() * 0.5f);
 		m_vscrollbar->setMax(m_drawer.getHeight() - m_display_text_rect.getHeight());
@@ -1142,18 +1236,19 @@ void GUIHyperText::draw()
 		m_vscrollbar->setVisible(true);
 
 		m_vscrollbar->setPageSize(s32(m_drawer.getHeight()));
-
-		core::rect<s32> smaller_rect = m_display_text_rect;
-
-		smaller_rect.LowerRightCorner.X -= m_scrollbar_width;
-		m_drawer.place(smaller_rect);
 	} else {
 		m_vscrollbar->setMax(0);
 		m_vscrollbar->setPos(0);
 		m_vscrollbar->setVisible(false);
 	}
-	m_drawer.draw(AbsoluteClippingRect,
-			m_display_text_rect.UpperLeftCorner + m_text_scrollpos);
+	// We needs 2 iterations for the element positions and total height
+	// to be pre-calculated correctly, so we need to delay the actual drawing
+	// by this many iterations
+	if (m_draw_state >= 2) {
+		m_drawer.draw(AbsoluteClippingRect,
+				m_display_text_rect.UpperLeftCorner + m_text_scrollpos);
+	} else
+		m_draw_state++;
 
 	// draw children
 	IGUIElement::draw();

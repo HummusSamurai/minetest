@@ -1,30 +1,15 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include <string>
-#include <iostream>
-#include <vector>
-#include <utility>
 #include "gamedef.h"
-#include "inventory.h"
+
+#include <string>
+#include <vector>
+
+struct ItemStack;
 
 /*
 	Crafting methods.
@@ -45,7 +30,7 @@ enum CraftMethod
 /*
 	The type a hash can be. The earlier a type is mentioned in this enum,
 	the earlier it is tried at crafting, and the less likely is a collision.
-	Changing order causes changes in behaviour, so know what you do.
+	Changing order causes changes in behavior, so know what you do.
  */
 enum CraftHashType
 {
@@ -62,7 +47,7 @@ enum CraftHashType
 	CRAFT_HASH_TYPE_UNHASHED
 
 };
-const int craft_hash_type_max = (int) CRAFT_HASH_TYPE_UNHASHED;
+constexpr int craft_hash_type_max = (int) CRAFT_HASH_TYPE_UNHASHED;
 
 /*
 	Input: The contents of the crafting slots, arranged in matrix form
@@ -70,37 +55,17 @@ const int craft_hash_type_max = (int) CRAFT_HASH_TYPE_UNHASHED;
 struct CraftInput
 {
 	CraftMethod method = CRAFT_METHOD_NORMAL;
-	unsigned int width = 0;
+	unsigned int width = 0; //< used only for shaped recipes
 	std::vector<ItemStack> items;
 
 	CraftInput() = default;
 
 	CraftInput(CraftMethod method_, unsigned int width_,
-			const std::vector<ItemStack> &items_):
-		method(method_), width(width_), items(items_)
-	{}
+			const std::vector<ItemStack> &items_);
 
 	// Returns true if all items are empty.
 	bool empty() const;
 
-	std::string dump() const;
-};
-
-/*
-	Output: Result of crafting operation
-*/
-struct CraftOutput
-{
-	// Used for normal crafting and cooking, itemstring
-	std::string item = "";
-	// Used for cooking (cook time) and fuel (burn time), seconds
-	float time = 0.0f;
-
-	CraftOutput() = default;
-
-	CraftOutput(const std::string &item_, float time_):
-		item(item_), time(time_)
-	{}
 	std::string dump() const;
 };
 
@@ -122,6 +87,30 @@ struct CraftReplacements
 	CraftReplacements() = default;
 	CraftReplacements(const std::vector<std::pair<std::string, std::string> > &pairs_):
 		pairs(pairs_)
+	{}
+	std::string dump() const;
+};
+
+/*
+	Output: Result of crafting operation
+*/
+struct CraftOutput
+{
+	// Used for normal crafting and cooking, itemstring
+	std::string item;
+	// Used for cooking (cook time) and fuel (burn time), seconds
+	float time = 0.0f;
+
+	CraftReplacements replacements;
+
+	CraftOutput() = default;
+
+	CraftOutput(const std::string &item_, float time_):
+		item(item_), time(time_)
+	{}
+
+	CraftOutput(const std::string &item_, float time_, CraftReplacements replacements):
+		item(item_), time(time_), replacements(replacements)
 	{}
 	std::string dump() const;
 };
@@ -266,7 +255,7 @@ private:
 	std::string output;
 	// Recipe list (itemstrings)
 	std::vector<std::string> recipe;
-	// Recipe list (item names)
+	// Recipe list (item names), sorted
 	std::vector<std::string> recipe_names;
 	// bool indicating if initHash has been called already
 	bool hash_inited = false;

@@ -1,25 +1,9 @@
-/*
-Minetest
-Copyright (C) 2014-2018 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
-Copyright (C) 2015-2018 paramat
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2014-2018 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
+// Copyright (C) 2015-2018 paramat
 
 #include <fstream>
-#include <typeinfo>
 #include "mg_schematic.h"
 #include "server.h"
 #include "mapgen.h"
@@ -30,8 +14,10 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "util/numeric.h"
 #include "util/serialize.h"
 #include "serialization.h"
+#include "servermap.h"
 #include "filesys.h"
 #include "voxelalgorithms.h"
+#include "porting.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -80,6 +66,8 @@ Schematic::~Schematic()
 {
 	delete []schemdata;
 	delete []slice_probs;
+	u32 nodecount = size.X * size.Y * size.Z;
+	porting::TrackFreedMemory(nodecount * sizeof(MapNode));
 }
 
 ObjDef *Schematic::clone() const
@@ -140,7 +128,7 @@ void Schematic::blitToVManip(MMVManip *vm, v3s16 p, Rotation rot, bool force_pla
 			i_start  = sx - 1;
 			i_step_x = zstride;
 			i_step_z = -xstride;
-			SWAP(s16, sx, sz);
+			std::swap(sx, sz);
 			break;
 		case ROTATE_180:
 			i_start  = zstride * (sz - 1) + sx - 1;
@@ -151,7 +139,7 @@ void Schematic::blitToVManip(MMVManip *vm, v3s16 p, Rotation rot, bool force_pla
 			i_start  = zstride * (sz - 1);
 			i_step_x = -zstride;
 			i_step_z = xstride;
-			SWAP(s16, sx, sz);
+			std::swap(sx, sz);
 			break;
 		default:
 			i_start  = 0;
@@ -234,9 +222,7 @@ bool Schematic::placeOnVManip(MMVManip *vm, v3s16 p, u32 flags,
 void Schematic::placeOnMap(ServerMap *map, v3s16 p, u32 flags,
 	Rotation rot, bool force_place)
 {
-	std::map<v3s16, MapBlock *> lighting_modified_blocks;
 	std::map<v3s16, MapBlock *> modified_blocks;
-	std::map<v3s16, MapBlock *>::iterator it;
 
 	assert(map != NULL);
 	assert(schemdata != NULL);
@@ -257,7 +243,7 @@ void Schematic::placeOnMap(ServerMap *map, v3s16 p, u32 flags,
 	if (flags & DECO_PLACE_CENTER_Z)
 		p.Z -= (s.Z - 1) / 2;
 
-	//// Create VManip for effected area, emerge our area, modify area
+	//// Create VManip for affected area, emerge our area, modify area
 	//// inside VManip, then blit back.
 	v3s16 bp1 = getNodeBlockPos(p);
 	v3s16 bp2 = getNodeBlockPos(p + s - v3s16(1, 1, 1));
@@ -274,8 +260,7 @@ void Schematic::placeOnMap(ServerMap *map, v3s16 p, u32 flags,
 	//// Create & dispatch map modification events to observers
 	MapEditEvent event;
 	event.type = MEET_OTHER;
-	for (it = modified_blocks.begin(); it != modified_blocks.end(); ++it)
-		event.modified_blocks.insert(it->first);
+	event.setModifiedBlocks(modified_blocks);
 
 	map->dispatchEvent(event);
 }
@@ -339,7 +324,9 @@ bool Schematic::deserializeFromMts(std::istream *is)
 	delete []schemdata;
 	schemdata = new MapNode[nodecount];
 
-	MapNode::deSerializeBulk(ss, SER_FMT_VER_HIGHEST_READ, schemdata,
+	std::stringstream d_ss(std::ios_base::binary | std::ios_base::in | std::ios_base::out);
+	decompress(ss, d_ss, MTSCHEM_MAPNODE_SER_FMT_VER);
+	MapNode::deSerializeBulk(d_ss, MTSCHEM_MAPNODE_SER_FMT_VER, schemdata,
 		nodecount, 2, 2);
 
 	// Fix probability values for nodes that were ignore; removed in v2
@@ -384,8 +371,9 @@ bool Schematic::serializeToMts(std::ostream *os) const
 	}
 
 	// compressed bulk node data
-	MapNode::serializeBulk(ss, SER_FMT_VER_HIGHEST_WRITE,
-		schemdata, size.X * size.Y * size.Z, 2, 2, -1);
+	auto buf = MapNode::serializeBulk(MTSCHEM_MAPNODE_SER_FMT_VER,
+		schemdata, size.X * size.Y * size.Z, 2, 2);
+	compress(buf, ss, MTSCHEM_MAPNODE_SER_FMT_VER);
 
 	return true;
 }
@@ -484,12 +472,9 @@ bool Schematic::serializeToLua(std::ostream *os, bool use_comments,
 bool Schematic::loadSchematicFromFile(const std::string &filename,
 	const NodeDefManager *ndef, StringMap *replace_names)
 {
-	std::ifstream is(filename.c_str(), std::ios_base::binary);
-	if (!is.good()) {
-		errorstream << __FUNCTION__ << ": unable to open file '"
-			<< filename << "'" << std::endl;
+	auto is = open_ifstream(filename.c_str(), true);
+	if (!is.good())
 		return false;
-	}
 
 	if (!m_ndef)
 		m_ndef = ndef;
@@ -532,7 +517,7 @@ bool Schematic::saveSchematicToFile(const std::string &filename,
 		schem->condenseContentIds();
 	}
 
-	std::ostringstream os(std::ios_base::binary);
+	my_ostringstream os;
 	bool status = schem->serializeToMts(&os);
 
 	if (needs_condense)
@@ -541,24 +526,29 @@ bool Schematic::saveSchematicToFile(const std::string &filename,
 	if (!status)
 		return false;
 
-	return fs::safeWriteToFile(filename, os.str());
+	return fs::safeWriteToFile(filename, os.view());
 }
 
 
 bool Schematic::getSchematicFromMap(Map *map, v3s16 p1, v3s16 p2)
 {
-	MMVManip *vm = new MMVManip(map);
+	assert(p2 >= p1);
+	const v3s32 size_l = v3s32::from(p2) - v3s32::from(p1) + 1;
+	if (core::min_(size_l.X, size_l.Y, size_l.Z) < 0 ||
+		core::max_(size_l.X, size_l.Y, size_l.Z) > S16_MAX)
+		return false;
+	size = v3s16::from(size_l);
 
 	v3s16 bp1 = getNodeBlockPos(p1);
 	v3s16 bp2 = getNodeBlockPos(p2);
+	MMVManip *vm = new MMVManip(map);
 	vm->initialEmerge(bp1, bp2);
-
-	size = p2 - p1 + 1;
 
 	slice_probs = new u8[size.Y];
 	for (s16 y = 0; y != size.Y; y++)
 		slice_probs[y] = MTSCHEM_PROB_ALWAYS;
 
+	// FIXME: can overflow
 	schemdata = new MapNode[size.X * size.Y * size.Z];
 
 	u32 i = 0;
@@ -584,10 +574,11 @@ void Schematic::applyProbabilities(v3s16 p0,
 	std::vector<std::pair<v3s16, u8> > *plist,
 	std::vector<std::pair<s16, u8> > *splist)
 {
+	const size_t zstride = size.Y * size.X, volume = zstride * size.Z;
 	for (size_t i = 0; i != plist->size(); i++) {
 		v3s16 p = (*plist)[i].first - p0;
-		int index = p.Z * (size.Y * size.X) + p.Y * size.X + p.X;
-		if (index < size.Z * size.Y * size.X) {
+		s32 index = p.Z * zstride + p.Y * size.X + p.X;
+		if (index >= 0 && static_cast<u32>(index) < volume) {
 			u8 prob = (*plist)[i].second;
 			schemdata[index].param1 = prob;
 
@@ -598,8 +589,9 @@ void Schematic::applyProbabilities(v3s16 p0,
 	}
 
 	for (size_t i = 0; i != splist->size(); i++) {
-		s16 y = (*splist)[i].first - p0.Y;
-		slice_probs[y] = (*splist)[i].second;
+		s16 slice = (*splist)[i].first;
+		if (slice >= 0 && slice < size.Y)
+			slice_probs[slice] = (*splist)[i].second;
 	}
 }
 
@@ -623,7 +615,7 @@ void Schematic::condenseContentIds()
 			numids++;
 
 			m_nodenames.push_back(m_ndef->get(c).name);
-			nodeidmap.emplace(std::make_pair(c, id));
+			nodeidmap.emplace(c, id);
 		} else {
 			id = it->second;
 		}

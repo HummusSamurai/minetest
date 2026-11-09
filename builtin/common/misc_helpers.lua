@@ -1,25 +1,27 @@
--- Minetest: builtin/misc_helpers.lua
-
 --------------------------------------------------------------------------------
 -- Localize functions to avoid table lookups (better performance).
-local string_sub, string_find = string.sub, string.find
+local string_sub, string_find, string_rep = string.sub, string.find, string.rep
+local math = math
 
 --------------------------------------------------------------------------------
 local function basic_dump(o)
 	local tp = type(o)
 	if tp == "number" then
-		return tostring(o)
+		local s = tostring(o)
+		if tonumber(s) == o then
+			return s
+		end
+		-- Prefer an exact representation over a compact representation.
+		-- e.g. basic_dump(0.3) == "0.3",
+		-- but basic_dump(0.1 + 0.2) == "0.30000000000000004"
+		-- so the user can see that 0.1 + 0.2 ~= 0.3
+		return string.format("%.17g", o)
 	elseif tp == "string" then
 		return string.format("%q", o)
 	elseif tp == "boolean" then
 		return tostring(o)
 	elseif tp == "nil" then
 		return "nil"
-	-- Uncomment for full function dumping support.
-	-- Not currently enabled because bytecode isn't very human-readable and
-	-- dump's output is intended for humans.
-	--elseif tp == "function" then
-	--	return string.format("loadstring(%q)", string.dump(o))
 	elseif tp == "userdata" then
 		return tostring(o)
 	else
@@ -106,70 +108,152 @@ function dump2(o, name, dumped)
 	return string.format("%s = {}\n%s", name, table.concat(t))
 end
 
---------------------------------------------------------------------------------
--- This dumps values in a one-statement format.
+
+-- This dumps values in a human-readable expression format.
+-- If possible, the resulting string should evaluate to an equivalent value if loaded and executed.
 -- For example, {test = {"Testing..."}} becomes:
 -- [[{
 -- 	test = {
 -- 		"Testing..."
 -- 	}
 -- }]]
--- This supports tables as keys, but not circular references.
--- It performs poorly with multiple references as it writes out the full
--- table each time.
--- The indent field specifies a indentation string, it defaults to a tab.
--- Use the empty string to disable indentation.
--- The dumped and level arguments are internal-only.
-
-function dump(o, indent, nested, level)
-	local t = type(o)
-	if not level and t == "userdata" then
-		-- when userdata (e.g. player) is passed directly, print its metatable:
-		return "userdata metatable: " .. dump(getmetatable(o))
-	end
-	if t ~= "table" then
-		return basic_dump(o)
-	end
-
-	-- Contains table -> true/nil of currently nested tables
-	nested = nested or {}
-	if nested[o] then
-		return "<circular reference>"
-	end
-	nested[o] = true
+function dump(value, indent)
 	indent = indent or "\t"
-	level = level or 1
 
-	local ret = {}
-	local dumped_indexes = {}
-	for i, v in ipairs(o) do
-		ret[#ret + 1] = dump(v, indent, nested, level + 1)
-		dumped_indexes[i] = true
-	end
-	for k, v in pairs(o) do
-		if not dumped_indexes[k] then
-			if type(k) ~= "string" or not is_valid_identifier(k) then
-				k = "["..dump(k, indent, nested, level + 1).."]"
-			end
-			v = dump(v, indent, nested, level + 1)
-			ret[#ret + 1] = k.." = "..v
+	assert(type(indent) == "string", "dump()'s second argument should be a string or nil.")
+
+	local newline = indent == "" and "" or "\n"
+
+	local rope = {}
+	local write
+	do
+		-- Keeping the length of the table as a local variable is *much*
+		-- faster than invoking the length operator.
+		-- See https://gitspartv.github.io/LuaJIT-Benchmarks/#test12.
+		local i = 0
+		function write(str)
+			i = i + 1
+			rope[i] = str
 		end
 	end
-	nested[o] = nil
-	if indent ~= "" then
-		local indent_str = "\n"..string.rep(indent, level)
-		local end_indent_str = "\n"..string.rep(indent, level - 1)
-		return string.format("{%s%s%s}",
-				indent_str,
-				table.concat(ret, ","..indent_str),
-				end_indent_str)
+
+	local n_refs = {}
+	local function count_refs(val)
+		if type(val) ~= "table" then
+			return
+		end
+		local tbl = val
+		if n_refs[tbl] then
+			n_refs[tbl] = n_refs[tbl] + 1
+			return
+		end
+		n_refs[tbl] = 1
+		for k, v in pairs(tbl) do
+			count_refs(k)
+			count_refs(v)
+		end
 	end
-	return "{"..table.concat(ret, ", ").."}"
+	count_refs(value)
+
+	local refs = {}
+	local cur_ref = 1
+	local function write_value(val, level)
+		if type(val) ~= "table" then
+			write(basic_dump(val))
+			return
+		end
+
+		local tbl = val
+		if refs[tbl] then
+			write(refs[tbl])
+			return
+		end
+
+		if n_refs[val] > 1 then
+			refs[val] = ("getref(%d)"):format(cur_ref)
+			write(("setref(%d)"):format(cur_ref))
+			cur_ref = cur_ref + 1
+		end
+		write("{")
+		if next(tbl) == nil then
+			write("}")
+			return
+		end
+		write(newline)
+
+		local function write_entry(k, v)
+			write(string_rep(indent, level))
+			write("[")
+			write_value(k, level + 1)
+			write("] = ")
+			write_value(v, level + 1)
+			write(",")
+			write(newline)
+		end
+
+		local keys = {string = {}, number = {}}
+		for k in pairs(tbl) do
+			local t = type(k)
+			if keys[t] then
+				table.insert(keys[t], k)
+			end
+		end
+
+		-- Write string-keyed entries
+		table.sort(keys.string)
+		for _, k in ipairs(keys.string) do
+			local v = val[k]
+			if is_valid_identifier(k) then
+				write(string_rep(indent, level))
+				write(k)
+				write(" = ")
+				write_value(v, level + 1)
+				write(",")
+				write(newline)
+			else
+				write_entry(k, v)
+			end
+		end
+
+		-- Write number-keyed entries
+		local len = 0
+		for i in ipairs(tbl) do
+			len = i
+		end
+		if #keys.number == len then -- table is a list
+			for _, v in ipairs(tbl) do
+				write(string_rep(indent, level))
+				write_value(v, level + 1)
+				write(",")
+				write(newline)
+			end
+		else -- table harbors arbitrary number keys
+			table.sort(keys.number)
+			for _, k in ipairs(keys.number) do
+				write_entry(k, tbl[k])
+			end
+		end
+
+		-- Write all remaining entries
+		for k, v in pairs(val) do
+			if not keys[type(k)] then
+				write_entry(k, v)
+			end
+		end
+
+		write(string_rep(indent, level - 1))
+		write("}")
+	end
+	write_value(value, 1)
+	return table.concat(rope)
 end
 
 --------------------------------------------------------------------------------
 function string.split(str, delim, include_empty, max_splits, sep_is_pattern)
 	delim = delim or ","
+	if delim == "" then
+		error("string.split separator is empty", 2)
+	end
 	max_splits = max_splits or -2
 	local items = {}
 	local pos, len = 1, #str
@@ -203,65 +287,41 @@ function table.indexof(list, val)
 end
 
 --------------------------------------------------------------------------------
+function table.keyof(tb, val)
+	for k, v in pairs(tb) do
+		if v == val then
+			return k
+		end
+	end
+	return nil
+end
+
+--------------------------------------------------------------------------------
 function string:trim()
-	return (self:gsub("^%s*(.-)%s*$", "%1"))
+	return self:match("^%s*(.-)%s*$")
 end
 
---------------------------------------------------------------------------------
-function math.hypot(x, y)
-	local t
-	x = math.abs(x)
-	y = math.abs(y)
-	t = math.min(x, y)
-	x = math.max(x, y)
-	if x == 0 then return 0 end
-	t = t / x
-	return x * math.sqrt(1 + t * t)
-end
-
---------------------------------------------------------------------------------
-function math.sign(x, tolerance)
-	tolerance = tolerance or 0
-	if x > tolerance then
-		return 1
-	elseif x < -tolerance then
-		return -1
-	end
-	return 0
-end
-
---------------------------------------------------------------------------------
-function math.factorial(x)
-	assert(x % 1 == 0 and x >= 0, "factorial expects a non-negative integer")
-	if x >= 171 then
-		-- 171! is greater than the biggest double, no need to calculate
-		return math.huge
-	end
-	local v = 1
-	for k = 2, x do
-		v = v * k
-	end
-	return v
-end
-
-
-function math.round(x)
-	if x >= 0 then
-		return math.floor(x + 0.5)
-	end
-	return math.ceil(x - 0.5)
-end
-
-
+local formspec_escapes = {
+	["\\"] = "\\\\",
+	["["] = "\\[",
+	["]"] = "\\]",
+	[";"] = "\\;",
+	[","] = "\\,",
+	["$"] = "\\$",
+}
 function core.formspec_escape(text)
-	if text ~= nil then
-		text = string.gsub(text,"\\","\\\\")
-		text = string.gsub(text,"%]","\\]")
-		text = string.gsub(text,"%[","\\[")
-		text = string.gsub(text,";","\\;")
-		text = string.gsub(text,",","\\,")
-	end
-	return text
+	-- Use explicit character set instead of dot here because it doubles the performance
+	return text and string.gsub(text, "[\\%[%];,$]", formspec_escapes)
+end
+
+
+local hypertext_escapes = {
+	["\\"] = "\\\\",
+	["<"] = "\\<",
+	[">"] = "\\>",
+}
+function core.hypertext_escape(text)
+	return text and text:gsub("[\\<>]", hypertext_escapes)
 end
 
 
@@ -272,18 +332,21 @@ function core.wrap_text(text, max_length, as_table)
 		return as_table and {text} or text
 	end
 
-	for word in text:gmatch('%S+') do
-		local cur_length = #table.concat(line, ' ')
-		if cur_length > 0 and cur_length + #word + 1 >= max_length then
+	local line_length = 0
+	for word in text:gmatch("%S+") do
+		if line_length > 0 and line_length + #word + 1 >= max_length then
 			-- word wouldn't fit on current line, move to next line
-			table.insert(result, table.concat(line, ' '))
-			line = {}
+			table.insert(result, table.concat(line, " "))
+			line = {word}
+			line_length = #word
+		else
+			table.insert(line, word)
+			line_length = line_length + 1 + #word
 		end
-		table.insert(line, word)
 	end
 
-	table.insert(result, table.concat(line, ' '))
-	return as_table and result or table.concat(result, '\n')
+	table.insert(result, table.concat(line, " "))
+	return as_table and result or table.concat(result, "\n")
 end
 
 --------------------------------------------------------------------------------
@@ -432,70 +495,84 @@ function core.string_to_pos(value)
 		return nil
 	end
 
-	local p = {}
-	p.x, p.y, p.z = string.match(value, "^([%d.-]+)[, ] *([%d.-]+)[, ] *([%d.-]+)$")
-	if p.x and p.y and p.z then
-		p.x = tonumber(p.x)
-		p.y = tonumber(p.y)
-		p.z = tonumber(p.z)
-		return p
+	value = value:match("^%((.-)%)$") or value -- strip parentheses
+
+	local x, y, z = value:trim():match("^([%d.-]+)[,%s]%s*([%d.-]+)[,%s]%s*([%d.-]+)$")
+	if x and y and z then
+		x = tonumber(x)
+		y = tonumber(y)
+		z = tonumber(z)
+		return vector.new(x, y, z)
 	end
-	p = {}
-	p.x, p.y, p.z = string.match(value, "^%( *([%d.-]+)[, ] *([%d.-]+)[, ] *([%d.-]+) *%)$")
-	if p.x and p.y and p.z then
-		p.x = tonumber(p.x)
-		p.y = tonumber(p.y)
-		p.z = tonumber(p.z)
-		return p
-	end
+
 	return nil
 end
 
 
 --------------------------------------------------------------------------------
-function core.string_to_area(value)
-	local p1, p2 = unpack(value:split(") ("))
-	if p1 == nil or p2 == nil then
-		return nil
+
+do
+	local rel_num_cap = "(~?-?%d*%.?%d*)" -- may be overly permissive as this will be tonumber'ed anyways
+	local num_delim = "[,%s]%s*"
+	local pattern = "^" .. table.concat({rel_num_cap, rel_num_cap, rel_num_cap}, num_delim) .. "$"
+
+	local function parse_area_string(pos, relative_to)
+		local pp = {}
+		pp.x, pp.y, pp.z = pos:trim():match(pattern)
+		return core.parse_coordinates(pp.x, pp.y, pp.z, relative_to)
 	end
 
-	p1 = core.string_to_pos(p1 .. ")")
-	p2 = core.string_to_pos("(" .. p2)
-	if p1 == nil or p2 == nil then
-		return nil
+	function core.string_to_area(value, relative_to)
+		local p1, p2 = value:match("^%((.-)%)%s*%((.-)%)$")
+		if not p1 then
+			return
+		end
+
+		p1 = parse_area_string(p1, relative_to)
+		p2 = parse_area_string(p2, relative_to)
+
+		if p1 == nil or p2 == nil then
+			return
+		end
+
+		return p1, p2
 	end
-
-	return p1, p2
 end
 
-local function test_string_to_area()
-	local p1, p2 = core.string_to_area("(10.0, 5, -2) (  30.2,   4, -12.53)")
-	assert(p1.x == 10.0 and p1.y == 5 and p1.z == -2)
-	assert(p2.x == 30.2 and p2.y == 4 and p2.z == -12.53)
 
-	p1, p2 = core.string_to_area("(10.0, 5, -2  30.2,   4, -12.53")
-	assert(p1 == nil and p2 == nil)
-
-	p1, p2 = core.string_to_area("(10.0, 5,) -2  fgdf2,   4, -12.53")
-	assert(p1 == nil and p2 == nil)
-end
-
-test_string_to_area()
-
---------------------------------------------------------------------------------
-function table.copy(t, seen)
-	local n = {}
-	seen = seen or {}
-	seen[t] = n
+local function table_copy(val, preserve_metatables, seen)
+	if type(val) ~= "table" then
+		return val
+	end
+	local t = val
+	if seen[t] then
+		return seen[t]
+	end
+	local res = {}
+	seen[t] = res
 	for k, v in pairs(t) do
-		n[(type(k) == "table" and (seen[k] or table.copy(k, seen))) or k] =
-			(type(v) == "table" and (seen[v] or table.copy(v, seen))) or v
+		local k_copy = table_copy(k, preserve_metatables, seen)
+		local v_copy = table_copy(v, preserve_metatables, seen)
+		res[k_copy] = v_copy
 	end
-	return n
+	if preserve_metatables then
+		setmetatable(res, getmetatable(t))
+	end
+	return res
 end
 
+function table.copy(value)
+	return table_copy(value, false, {})
+end
+
+function table.copy_with_metatables(value)
+	return table_copy(value, true, {})
+end
 
 function table.insert_all(t, other)
+	if table.move then -- LuaJIT
+		return table.move(other, 1, #other, #t + 1, t)
+	end
 	for i=1, #other do
 		t[#t + 1] = other[i]
 	end
@@ -529,19 +606,7 @@ end
 --------------------------------------------------------------------------------
 -- mainmenu only functions
 --------------------------------------------------------------------------------
-if INIT == "mainmenu" then
-	function core.get_game(index)
-		local games = core.get_games()
-
-		if index > 0 and index <= #games then
-			return games[index]
-		end
-
-		return nil
-	end
-end
-
-if INIT == "client" or INIT == "mainmenu" then
+if core.gettext then -- for client and mainmenu
 	function fgettext_ne(text, ...)
 		text = core.gettext(text)
 		local arg = {n=select('#', ...), ...}
@@ -570,6 +635,10 @@ if INIT == "client" or INIT == "mainmenu" then
 	function fgettext(text, ...)
 		return core.formspec_escape(fgettext_ne(text, ...))
 	end
+
+	function hgettext(text, ...)
+		return core.hypertext_escape(fgettext_ne(text, ...))
+	end
 end
 
 local ESCAPE_CHAR = string.char(0x1b)
@@ -590,7 +659,7 @@ function core.colorize(color, message)
 		lines[i] = color_code .. line
 	end
 
-	return table.concat(lines, "\n") .. core.get_color_escape_sequence("#ffffff")
+	return table.concat(lines, "\n") .. core.get_color_escape_sequence("#fff")
 end
 
 
@@ -606,12 +675,15 @@ function core.strip_colors(str)
 	return (str:gsub(ESCAPE_CHAR .. "%([bc]@[^)]+%)", ""))
 end
 
-function core.translate(textdomain, str, ...)
+
+local function translate(textdomain, str, num, ...)
 	local start_seq
-	if textdomain == "" then
+	if textdomain == "" and num == "" then
 		start_seq = ESCAPE_CHAR .. "T"
-	else
+	elseif num == "" then
 		start_seq = ESCAPE_CHAR .. "(T@" .. textdomain .. ")"
+	else
+		start_seq = ESCAPE_CHAR .. "(T@" .. textdomain .. "@" .. num .. ")"
 	end
 	local arg = {n=select('#', ...), ...}
 	local end_seq = ESCAPE_CHAR .. "E"
@@ -642,8 +714,31 @@ function core.translate(textdomain, str, ...)
 	return start_seq .. translated .. end_seq
 end
 
+function core.translate(textdomain, str, ...)
+	return translate(textdomain, str, "", ...)
+end
+
+function core.translate_n(textdomain, str, str_plural, n, ...)
+	assert (type(n) == "number")
+	assert (n >= 0)
+	assert (math.floor(n) == n)
+
+	-- Truncate n if too large
+	local max = 1000000
+	if n >= 2 * max then
+		n = n % max + max
+	end
+	if n == 1 then
+		return translate(textdomain, str, "1", ...)
+	else
+		return translate(textdomain, str_plural, tostring(n), ...)
+	end
+end
+
 function core.get_translator(textdomain)
-	return function(str, ...) return core.translate(textdomain or "", str, ...) end
+	return
+		(function(str, ...) return core.translate(textdomain or "", str, ...) end),
+		(function(str, str_plural, n, ...) return core.translate_n(textdomain or "", str, str_plural, n, ...) end)
 end
 
 --------------------------------------------------------------------------------
@@ -704,9 +799,110 @@ function core.privs_to_string(privs, delim)
 			list[#list + 1] = priv
 		end
 	end
+	table.sort(list)
 	return table.concat(list, delim)
 end
 
 function core.is_nan(number)
 	return number ~= number
 end
+
+--[[ Helper function for parsing an optionally relative number
+of a chat command parameter, using the chat command tilde notation.
+
+Parameters:
+* arg: String snippet containing the number; possible values:
+    * "<number>": return as number
+    * "~<number>": return relative_to + <number>
+    * "~": return relative_to
+    * Anything else will return `nil`
+* relative_to: Number to which the `arg` number might be relative to
+
+Returns:
+A number or `nil`, depending on `arg.
+
+Examples:
+* `core.parse_relative_number("5", 10)` returns 5
+* `core.parse_relative_number("~5", 10)` returns 15
+* `core.parse_relative_number("~", 10)` returns 10
+]]
+function core.parse_relative_number(arg, relative_to)
+	if not arg then
+		return nil
+	elseif arg == "~" then
+		return relative_to
+	elseif string.sub(arg, 1, 1) == "~" then
+		local number = tonumber(string.sub(arg, 2))
+		if not number then
+			return nil
+		end
+		if core.is_nan(number) or number == math.huge or number == -math.huge then
+			return nil
+		end
+		return relative_to + number
+	else
+		local number = tonumber(arg)
+		if core.is_nan(number) or number == math.huge or number == -math.huge then
+			return nil
+		end
+		return number
+	end
+end
+
+--[[ Helper function to parse coordinates that might be relative
+to another position; supports chat command tilde notation.
+Intended to be used in chat command parameter parsing.
+
+Parameters:
+* x, y, z: Parsed x, y, and z coordinates as strings
+* relative_to: Optional position vector as reference point
+
+Syntax of x, y and z:
+* "<number>": use as number
+* "~<number>": use <number> + reference point on this axis
+* "~": use reference point on this axis
+
+Returns: a vector or nil for invalid input
+]]
+function core.parse_coordinates(x, y, z, relative_to)
+	if not relative_to then
+		x, y, z = tonumber(x), tonumber(y), tonumber(z)
+		return x and y and z and vector.new(x, y, z)
+	end
+	local rx = core.parse_relative_number(x, relative_to.x)
+	local ry = core.parse_relative_number(y, relative_to.y)
+	local rz = core.parse_relative_number(z, relative_to.z)
+	return rx and ry and rz and vector.new(rx, ry, rz)
+end
+
+-- Supports circular tables; does not support table keys
+-- Correctly checks whether a mapping of references ("same") exists
+-- Is significantly more efficient than assert.same
+local function assert_same(a, b, same)
+	same = same or {}
+	if same[a] or same[b] then
+		assert(same[a] == b and same[b] == a)
+		return
+	end
+	if a == b then
+		return
+	end
+	if type(a) ~= "table" or type(b) ~= "table" then
+		assert(a == b)
+		return
+	end
+	same[a] = b
+	same[b] = a
+	local count = 0
+	for k, v in pairs(a) do
+		count = count + 1
+		assert(type(k) ~= "table")
+		assert_same(v, b[k], same)
+	end
+	for _ in pairs(b) do
+		count = count - 1
+	end
+	assert(count == 0)
+end
+
+core.assert_same = assert_same

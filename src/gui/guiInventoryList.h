@@ -1,27 +1,16 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include "inventorymanager.h"
-#include "irrlichttypes_extrabloated.h"
-#include "util/string.h"
+#include <IGUIElement.h>
+#include <IGUIEnvironment.h>
+#include "irr_v2d.h"
+#include "irr_ptr.h"
+#include "ITexture.h"
+
 
 class GUIFormSpecMenu;
 
@@ -34,11 +23,19 @@ public:
 
 		ItemSpec(const InventoryLocation &a_inventoryloc,
 				const std::string &a_listname,
-				s32 a_i) :
+				s32 a_i,
+				const v2s32 slotsize) :
 			inventoryloc(a_inventoryloc),
 			listname(a_listname),
-			i(a_i)
+			i(a_i),
+			slotsize(slotsize)
 		{
+		}
+
+		bool operator==(const ItemSpec& other) const
+		{
+			return inventoryloc == other.inventoryloc &&
+					listname == other.listname && i == other.i;
 		}
 
 		bool isValid() const { return i != -1; }
@@ -46,6 +43,7 @@ public:
 		InventoryLocation inventoryloc;
 		std::string listname;
 		s32 i = -1;
+		v2s32 slotsize;
 	};
 
 	// options for inventorylists that are setable with the lua api
@@ -56,6 +54,8 @@ public:
 		// colors for normal and highlighted slot background
 		video::SColor slotbg_n = video::SColor(255, 128, 128, 128);
 		video::SColor slotbg_h = video::SColor(255, 192, 192, 192);
+		irr_ptr<video::ITexture> slotbgimg_n;
+		irr_ptr<video::ITexture> slotbgimg_h;
 	};
 
 	GUIInventoryList(gui::IGUIEnvironment *env,
@@ -73,9 +73,13 @@ public:
 		const Options &options,
 		gui::IGUIFont *font);
 
-	virtual void draw() override;
+	void draw() override;
 
-	virtual bool OnEvent(const SEvent &event) override;
+	bool OnEvent(const SEvent &event) override;
+
+	bool isPointInside(const core::position2d<s32> &point) const override;
+
+	void setHoveredIndex(s32 item_i);
 
 	const InventoryLocation &getInventoryloc() const
 	{
@@ -99,7 +103,12 @@ public:
 		m_options.slotbordercolor = slotbordercolor;
 	}
 
-	// returns -1 if not item is at pos p
+	const v2s32 getSlotSize() const noexcept
+	{
+		return m_slot_size;
+	}
+
+	// returns -1 if no item is at pos p
 	s32 getItemIndexAtPos(v2s32 p) const;
 
 private:

@@ -1,25 +1,12 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include <unordered_set>
+#include <map>
+#include <memory>
 #include "metadata.h"
 
 /*
@@ -34,10 +21,10 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 class Inventory;
 class IItemDefManager;
 
-class NodeMetadata : public Metadata
+class NodeMetadata : public SimpleMetadata
 {
 public:
-	NodeMetadata(IItemDefManager *item_def_mgr);
+	NodeMetadata(const IItemDefManager *item_def_mgr);
 	~NodeMetadata();
 
 	void serialize(std::ostream &os, u8 version, bool disk=true) const;
@@ -49,19 +36,22 @@ public:
 	// The inventory
 	Inventory *getInventory()
 	{
-		return m_inventory;
+		return m_inventory.get();
 	}
 
 	inline bool isPrivate(const std::string &name) const
 	{
 		return m_privatevars.count(name) != 0;
 	}
-	void markPrivate(const std::string &name, bool set);
+
+	/// Marks a key as private.
+	/// @return metadata modified?
+	bool markPrivate(const std::string &name, bool set);
 
 private:
 	int countNonPrivate() const;
 
-	Inventory *m_inventory;
+	std::unique_ptr<Inventory> m_inventory;
 	std::unordered_set<std::string> m_privatevars;
 };
 
@@ -82,29 +72,33 @@ public:
 	~NodeMetadataList();
 
 	void serialize(std::ostream &os, u8 blockver, bool disk = true,
-		bool absolute_pos = false) const;
-	void deSerialize(std::istream &is, IItemDefManager *item_def_mgr,
+		bool absolute_pos = false, bool include_empty = false) const;
+	void deSerialize(std::istream &is, const IItemDefManager *item_def_mgr,
 		bool absolute_pos = false);
 
-	// Add all keys in this list to the vector keys
-	std::vector<v3s16> getAllKeys();
+	// Return all keys
+	std::vector<v3s16> getAllKeys() const;
 	// Get pointer to data
-	NodeMetadata *get(v3s16 p);
-	// Deletes data
-	void remove(v3s16 p);
-	// Deletes old data and sets a new one
-	void set(v3s16 p, NodeMetadata *d);
-	// Deletes all
+	NodeMetadata *get(v3s16 p) const;
+
+	/// @brief Deletes data
+	/// @return the old data (if it was owned)
+	std::unique_ptr<NodeMetadata> remove(v3s16 p);
+	/// @brief Deletes old data and sets a new one
+	/// @return the old data (if it was owned)
+	std::unique_ptr<NodeMetadata> set(v3s16 p, NodeMetadata *d);
+	/// @brief Deletes all entries
+	/// @warning Make sure no pointers are still in use!
 	void clear();
 
 	size_t size() const { return m_data.size(); }
 
-	NodeMetadataMap::const_iterator begin()
+	NodeMetadataMap::const_iterator begin() const
 	{
 		return m_data.begin();
 	}
 
-	NodeMetadataMap::const_iterator end()
+	NodeMetadataMap::const_iterator end() const
 	{
 		return m_data.end();
 	}
@@ -112,6 +106,8 @@ public:
 private:
 	int countNonEmpty() const;
 
-	bool m_is_metadata_owner;
+	// FIXME: having a single class own or not own pointers depending on a variable
+	// is not clean and prevents refactoring this to unique_ptr...
+	const bool m_is_metadata_owner;
 	NodeMetadataMap m_data;
 };

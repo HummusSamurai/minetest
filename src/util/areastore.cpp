@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2015 est31 <mtest31@outlook.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2015 est31 <mtest31@outlook.com>
 
 #include "util/areastore.h"
 #include "util/serialize.h"
@@ -69,7 +54,7 @@ void AreaStore::serialize(std::ostream &os) const
 	// After 5.1.0-dev:  version >= 5 throws SerializationError
 	// Forwards-compatibility is assumed before version 5.
 
-	writeU8(os, 0); // Serialisation version
+	writeU8(os, 0); // Serialization version
 
 	// TODO: Compression?
 	writeU16(os, areas_map.size());
@@ -107,7 +92,7 @@ void AreaStore::deserialize(std::istream &is)
 		areas.emplace_back(std::move(a));
 	}
 
-	bool read_ids = is.good(); // EOF for old formats
+	const bool read_ids = canRead(is); // since 5.1.0-dev
 
 	for (auto &area : areas) {
 		if (read_ids)
@@ -156,7 +141,7 @@ void AreaStore::cacheMiss(void *data, const v3s16 &mpos, std::vector<Area *> *de
 		minedge.Y + r - 1,
 		minedge.Z + r - 1);
 
-	as->getAreasInArea(dest, minedge, maxedge, true);
+	as->getOverlappingAreas(dest, minedge, maxedge);
 
 	/* infostream << "Cache miss with " << dest->size() << " areas, between ("
 			<< minedge.X << ", " << minedge.Y << ", " << minedge.Z
@@ -193,8 +178,7 @@ bool VectorAreaStore::insertArea(Area *a)
 {
 	if (a->id == U32_MAX)
 		a->id = getNextId();
-	std::pair<AreaMap::iterator, bool> res =
-			areas_map.insert(std::make_pair(a->id, *a));
+	auto res = areas_map.emplace(a->id, *a);
 	if (!res.second)
 		// ID is not unique
 		return false;
@@ -209,7 +193,7 @@ bool VectorAreaStore::removeArea(u32 id)
 	if (it == areas_map.end())
 		return false;
 	Area *a = &it->second;
-	for (std::vector<Area *>::iterator v_it = m_areas.begin();
+	for (auto v_it = m_areas.begin();
 			v_it != m_areas.end(); ++v_it) {
 		if (*v_it == a) {
 			m_areas.erase(v_it);
@@ -230,15 +214,22 @@ void VectorAreaStore::getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos)
 	}
 }
 
-void VectorAreaStore::getAreasInArea(std::vector<Area *> *result,
-		v3s16 minedge, v3s16 maxedge, bool accept_overlap)
+void VectorAreaStore::getOverlappingAreas(std::vector<Area *> *result,
+		const v3s16 minedge, const v3s16 maxedge)
 {
-	for (Area *area : m_areas) {
-		if (accept_overlap ? AST_AREAS_OVERLAP(minedge, maxedge, area) :
-				AST_CONTAINS_AREA(minedge, maxedge, area)) {
-			result->push_back(area);
-		}
-	}
+	std::copy_if(m_areas.begin(), m_areas.end(), std::back_inserter(*result),
+		[&](const Area *area) {
+			return AST_AREAS_OVERLAP(minedge, maxedge, area);
+		});
+}
+
+void VectorAreaStore::getContainingAreas(std::vector<Area *> *result,
+		const v3s16 minedge, const v3s16 maxedge)
+{
+	std::copy_if(m_areas.begin(), m_areas.end(), std::back_inserter(*result),
+		[&](const Area *area) {
+			return AST_CONTAINS_AREA(minedge, maxedge, area);
+		});
 }
 
 #if USE_SPATIAL
@@ -264,7 +255,7 @@ bool SpatialAreaStore::insertArea(Area *a)
 {
 	if (a->id == U32_MAX)
 		a->id = getNextId();
-	if (!areas_map.insert(std::make_pair(a->id, *a)).second)
+	if (!areas_map.emplace(a->id, *a).second)
 		// ID is not unique
 		return false;
 	m_tree->insertData(0, nullptr, get_spatial_region(a->minedge, a->maxedge), a->id);
@@ -274,7 +265,7 @@ bool SpatialAreaStore::insertArea(Area *a)
 
 bool SpatialAreaStore::removeArea(u32 id)
 {
-	std::map<u32, Area>::iterator itr = areas_map.find(id);
+	auto itr = areas_map.find(id);
 	if (itr != areas_map.end()) {
 		Area *a = &itr->second;
 		bool result = m_tree->deleteData(get_spatial_region(a->minedge,
@@ -293,21 +284,24 @@ void SpatialAreaStore::getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos
 	m_tree->pointLocationQuery(get_spatial_point(pos), visitor);
 }
 
-void SpatialAreaStore::getAreasInArea(std::vector<Area *> *result,
-		v3s16 minedge, v3s16 maxedge, bool accept_overlap)
+void SpatialAreaStore::getOverlappingAreas(std::vector<Area *> *result,
+		const v3s16 minedge, const v3s16 maxedge)
 {
 	VectorResultVisitor visitor(result, this);
-	if (accept_overlap) {
-		m_tree->intersectsWithQuery(get_spatial_region(minedge, maxedge),
-			visitor);
-	} else {
-		m_tree->containsWhatQuery(get_spatial_region(minedge, maxedge), visitor);
-	}
+	m_tree->intersectsWithQuery(get_spatial_region(minedge, maxedge), visitor);
+}
+
+void SpatialAreaStore::getContainingAreas(std::vector<Area *> *result,
+		const v3s16 minedge, const v3s16 maxedge)
+{
+	VectorResultVisitor visitor(result, this);
+	m_tree->containsWhatQuery(get_spatial_region(minedge, maxedge), visitor);
 }
 
 SpatialAreaStore::~SpatialAreaStore()
 {
 	delete m_tree;
+	delete m_storagemanager;
 }
 
 SpatialAreaStore::SpatialAreaStore()

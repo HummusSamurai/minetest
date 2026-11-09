@@ -1,38 +1,35 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "player.h"
 
-#include "threading/mutex_auto_lock.h"
-#include "util/numeric.h"
-#include "hud.h"
+#include <cmath>
+#include <cassert>
+#include "hud_element.h"
 #include "constants.h"
 #include "gamedef.h"
-#include "settings.h"
-#include "log.h"
-#include "porting.h"  // strlcpy
+#include "client/inputhandler.h"
+#include <tuple>
 
+const struct EnumString es_CameraMode[] = {
+	{CAMERA_MODE_ANY, "any"},
+	{CAMERA_MODE_FIRST, "first"},
+	{CAMERA_MODE_THIRD, "third"},
+	{CAMERA_MODE_THIRD_FRONT, "third_front"},
+	{0, nullptr}
+};
 
-Player::Player(const char *name, IItemDefManager *idef):
+bool is_valid_player_name(std::string_view name)
+{
+	return !name.empty() && name.size() <= PLAYERNAME_SIZE && string_allowed(name, PLAYERNAME_ALLOWED_CHARS);
+}
+
+Player::Player(const std::string &name, const IItemDefManager *idef):
 	inventory(idef)
 {
-	strlcpy(m_name, name, PLAYERNAME_SIZE);
+	m_name = name;
+	assert(!m_name.empty());
 
 	inventory.clear();
 	inventory.addList("main", PLAYER_INVENTORY_SIZE);
@@ -44,7 +41,6 @@ Player::Player(const char *name, IItemDefManager *idef):
 
 	// Can be redefined via Lua
 	inventory_formspec = "size[8,7.5]"
-		//"image[1,0.6;1,2;player.png]"
 		"list[current_player;main;0,3.5;8,4;]"
 		"list[current_player;craft;3,0;3,3;]"
 		"listring[]"
@@ -70,30 +66,25 @@ Player::Player(const char *name, IItemDefManager *idef):
 		HUD_FLAG_HOTBAR_VISIBLE    | HUD_FLAG_HEALTHBAR_VISIBLE |
 		HUD_FLAG_CROSSHAIR_VISIBLE | HUD_FLAG_WIELDITEM_VISIBLE |
 		HUD_FLAG_BREATHBAR_VISIBLE | HUD_FLAG_MINIMAP_VISIBLE   |
-		HUD_FLAG_MINIMAP_RADAR_VISIBLE;
+		HUD_FLAG_MINIMAP_RADAR_VISIBLE | HUD_FLAG_BASIC_DEBUG   |
+		HUD_FLAG_CHAT_VISIBLE;
 
 	hud_hotbar_itemcount = HUD_HOTBAR_ITEMCOUNT_DEFAULT;
-
-	m_player_settings.readGlobalSettings();
-	// Register player setting callbacks
-	for (const std::string &name : m_player_settings.setting_names)
-		g_settings->registerChangedCallback(name,
-			&Player::settingsChangedCallback, &m_player_settings);
 }
 
 Player::~Player()
 {
-	// m_player_settings becomes invalid, remove callbacks
-	for (const std::string &name : m_player_settings.setting_names)
-		g_settings->deregisterChangedCallback(name,
-			&Player::settingsChangedCallback, &m_player_settings);
-	clearHud();
 }
 
 void Player::setWieldIndex(u16 index)
 {
 	const InventoryList *mlist = inventory.getList("main");
 	m_wield_index = MYMIN(index, mlist ? mlist->getSize() : 0);
+}
+
+u16 Player::getWieldIndex()
+{
+	return std::min(m_wield_index, getMaxHotbarItemcount());
 }
 
 ItemStack &Player::getWieldedItem(ItemStack *selected, ItemStack *hand) const
@@ -113,65 +104,132 @@ ItemStack &Player::getWieldedItem(ItemStack *selected, ItemStack *hand) const
 	return (hand && selected->name.empty()) ? *hand : *selected;
 }
 
-u32 Player::addHud(HudElement *toadd)
+u32 PlayerHud::getFreeID()
 {
-	MutexAutoLock lock(m_mutex);
+	size_t size = m_elements.size();
+	for (size_t i = 0; i != size; i++) {
+		if (!m_elements[i])
+			return i;
+	}
+	return size;
+}
 
-	u32 id = getFreeHudID();
+u32 PlayerHud::add(std::unique_ptr<HudElement> toadd)
+{
+	u32 id = getFreeID();
 
-	if (id < hud.size())
-		hud[id] = toadd;
+	if (id < m_elements.size())
+		m_elements[id] = std::move(toadd);
 	else
-		hud.push_back(toadd);
+		m_elements.push_back(std::move(toadd));
 
 	return id;
 }
 
-HudElement* Player::getHud(u32 id)
+HudElement* PlayerHud::get(u32 id)
 {
-	MutexAutoLock lock(m_mutex);
-
-	if (id < hud.size())
-		return hud[id];
-
-	return NULL;
+	if (id < m_elements.size())
+		return m_elements[id].get();
+	return nullptr;
 }
 
-HudElement* Player::removeHud(u32 id)
+bool PlayerHud::remove(u32 id)
 {
-	MutexAutoLock lock(m_mutex);
-
-	HudElement* retval = NULL;
-	if (id < hud.size()) {
-		retval = hud[id];
-		hud[id] = NULL;
+	bool removed = false;
+	if (id < m_elements.size()) {
+		m_elements[id].reset();
+		removed = true;
 	}
-	return retval;
+	// shrink list if possible
+	while (!m_elements.empty() && m_elements.back() == nullptr)
+		m_elements.pop_back();
+	return removed;
 }
 
-void Player::clearHud()
+void PlayerHud::clear()
 {
-	MutexAutoLock lock(m_mutex);
+	m_elements.clear();
+}
 
-	while(!hud.empty()) {
-		delete hud.back();
-		hud.pop_back();
+u16 Player::getMaxHotbarItemcount()
+{
+	InventoryList *mainlist = inventory.getList("main");
+	return mainlist ? std::min(mainlist->getSize(), (u32) hud_hotbar_itemcount) : 0;
+}
+
+void PlayerControl::setMovementFromKeys()
+{
+	float x = right - left;
+	float y = up - down;
+	if (x != 0 || y != 0) {
+		// If there is a keyboard event, it takes priority
+		movement_direction = std::atan2(x, y);
+		movement_speed = std::min(1.0f, sqrtf(x*x + y*y));
 	}
 }
 
-void PlayerSettings::readGlobalSettings()
+static u32 convert_direction_bit(float angle, float direction, int bit)
 {
-	free_move = g_settings->getBool("free_move");
-	pitch_move = g_settings->getBool("pitch_move");
-	fast_move = g_settings->getBool("fast_move");
-	continuous_forward = g_settings->getBool("continuous_forward");
-	always_fly_fast = g_settings->getBool("always_fly_fast");
-	aux1_descends = g_settings->getBool("aux1_descends");
-	noclip = g_settings->getBool("noclip");
-	autojump = g_settings->getBool("autojump");
+	constexpr float angular_threshold = 3.0f/8.0f * M_PI;
+	const auto diff = std::abs(angle - direction);
+	const auto mindiff = std::min<float>(diff, 2*M_PI - diff);
+	return ((u32)(mindiff <= angular_threshold) << bit);
 }
 
-void Player::settingsChangedCallback(const std::string &name, void *data)
+u32 PlayerControl::getKeysPressed() const
 {
-	((PlayerSettings *)data)->readGlobalSettings();
+	u32 keypress_bits =
+		( (u32)(jump  & 1) << 4) |
+		( (u32)(aux1  & 1) << 5) |
+		( (u32)(sneak & 1) << 6) |
+		( (u32)(dig   & 1) << 7) |
+		( (u32)(place & 1) << 8) |
+		( (u32)(zoom  & 1) << 9)
+	;
+
+	if (isMoving()) {
+		keypress_bits |=
+			convert_direction_bit(movement_direction, 0, 0) | // Forward
+			convert_direction_bit(movement_direction, M_PI, 1) | // Backward
+			convert_direction_bit(movement_direction, -M_PI_2, 2) | // Left
+			convert_direction_bit(movement_direction, M_PI_2, 3); // Right
+	}
+
+	return keypress_bits;
+}
+
+
+void PlayerControl::unpackKeysPressed(u32 keypress_bits)
+{
+	up    = keypress_bits & (1 << 0);
+	down  = keypress_bits & (1 << 1);
+	left  = keypress_bits & (1 << 2);
+	right = keypress_bits & (1 << 3);
+	jump  = keypress_bits & (1 << 4);
+	aux1  = keypress_bits & (1 << 5);
+	sneak = keypress_bits & (1 << 6);
+	dig   = keypress_bits & (1 << 7);
+	place = keypress_bits & (1 << 8);
+	zoom  = keypress_bits & (1 << 9);
+}
+
+v2f PlayerControl::getMovement() const
+{
+	return v2f(std::sin(movement_direction), std::cos(movement_direction)) * movement_speed;
+}
+
+static auto tie(const PlayerPhysicsOverride &o)
+{
+	// Make sure to add new members to this list!
+	return std::tie(
+	o.speed, o.jump, o.gravity, o.sneak, o.sneak_glitch, o.new_move, o.speed_climb,
+	o.speed_crouch, o.liquid_fluidity, o.liquid_fluidity_smooth, o.liquid_sink,
+	o.acceleration_default, o.acceleration_air, o.speed_fast, o.acceleration_fast,
+	o.speed_walk
+	);
+}
+
+bool PlayerPhysicsOverride::operator==(const PlayerPhysicsOverride &other) const
+{
+	return tie(*this) == tie(other);
 }

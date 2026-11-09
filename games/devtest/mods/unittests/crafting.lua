@@ -1,44 +1,44 @@
--- Test minetest.clear_craft function
+dofile(core.get_modpath(core.get_current_modname()) .. "/crafting_prepare.lua")
+
+--[[ FIXME: this needs to be moved to C++, because we can't clear crafts at runtime
 local function test_clear_craft()
-	minetest.log("info", "[unittests] Testing minetest.clear_craft")
 	-- Clearing by output
-	minetest.register_craft({
+	core.register_craft({
 		output = "foo",
 		recipe = {{"bar"}}
 	})
-	minetest.register_craft({
+	core.register_craft({
 		output = "foo 4",
 		recipe = {{"foo", "bar"}}
 	})
-	assert(#minetest.get_all_craft_recipes("foo") == 2)
-	minetest.clear_craft({output="foo"})
-	assert(minetest.get_all_craft_recipes("foo") == nil)
+	assert(#core.get_all_craft_recipes("foo") == 2)
+	core.clear_craft({output="foo"})
+	assert(core.get_all_craft_recipes("foo") == nil)
 	-- Clearing by input
-	minetest.register_craft({
+	core.register_craft({
 		output = "foo 4",
 		recipe = {{"foo", "bar"}}
 	})
-	assert(#minetest.get_all_craft_recipes("foo") == 1)
-	minetest.clear_craft({recipe={{"foo", "bar"}}})
-	assert(minetest.get_all_craft_recipes("foo") == nil)
+	assert(#core.get_all_craft_recipes("foo") == 1)
+	core.clear_craft({recipe={{"foo", "bar"}}})
+	assert(core.get_all_craft_recipes("foo") == nil)
 end
+--]]
 
--- Test minetest.get_craft_result function
+-- Test core.get_craft_result function
 local function test_get_craft_result()
-	minetest.log("info", "[unittests] Testing minetest.get_craft_result")
-
 	-- normal
 	local input = {
 		method = "normal",
 		width = 2,
 		items = {"", "unittests:coal_lump", "", "unittests:stick"}
 	}
-	minetest.log("info", "[unittests] torch crafting input: "..dump(input))
-	local output, decremented_input = minetest.get_craft_result(input)
-	minetest.log("info", "[unittests] torch crafting output: "..dump(output))
-	minetest.log("info", "[unittests] torch crafting decremented input: "..dump(decremented_input))
+	core.log("info", "[unittests] torch crafting input: "..dump(input))
+	local output, decremented_input = core.get_craft_result(input)
+	core.log("info", "[unittests] torch crafting output: "..dump(output))
+	core.log("info", "[unittests] torch crafting decremented input: "..dump(decremented_input))
 	assert(output.item)
-	minetest.log("info", "[unittests] torch crafting output.item:to_table(): "..dump(output.item:to_table()))
+	core.log("info", "[unittests] torch crafting output.item:to_table(): "..dump(output.item:to_table()))
 	assert(output.item:get_name() == "unittests:torch")
 	assert(output.item:get_count() == 4)
 
@@ -48,10 +48,10 @@ local function test_get_craft_result()
 		width = 1,
 		items = {"unittests:coal_lump"}
 	}
-	minetest.log("info", "[unittests] coal fuel input: "..dump(input))
-	output, decremented_input = minetest.get_craft_result(input)
-	minetest.log("info", "[unittests] coal fuel output: "..dump(output))
-	minetest.log("info", "[unittests] coal fuel decremented input: "..dump(decremented_input))
+	core.log("info", "[unittests] coal fuel input: "..dump(input))
+	output, decremented_input = core.get_craft_result(input)
+	core.log("info", "[unittests] coal fuel output: "..dump(output))
+	core.log("info", "[unittests] coal fuel decremented input: "..dump(decremented_input))
 	assert(output.time)
 	assert(output.time > 0)
 
@@ -61,14 +61,14 @@ local function test_get_craft_result()
 		width = 1,
 		items = {"unittests:iron_lump"}
 	}
-	minetest.log("info", "[unittests] iron lump cooking input: "..dump(output))
-	output, decremented_input = minetest.get_craft_result(input)
-	minetest.log("info", "[unittests] iron lump cooking output: "..dump(output))
-	minetest.log("info", "[unittests] iron lump cooking decremented input: "..dump(decremented_input))
+	core.log("info", "[unittests] iron lump cooking input: "..dump(output))
+	output, decremented_input = core.get_craft_result(input)
+	core.log("info", "[unittests] iron lump cooking output: "..dump(output))
+	core.log("info", "[unittests] iron lump cooking decremented input: "..dump(decremented_input))
 	assert(output.time)
 	assert(output.time > 0)
 	assert(output.item)
-	minetest.log("info", "[unittests] iron lump cooking output.item:to_table(): "..dump(output.item:to_table()))
+	core.log("info", "[unittests] iron lump cooking output.item:to_table(): "..dump(output.item:to_table()))
 	assert(output.item:get_name() == "unittests:steel_ingot")
 	assert(output.item:get_count() == 1)
 
@@ -79,15 +79,15 @@ local function test_get_craft_result()
 		-- Using a wear of 60000
 		items = {"unittests:repairable_tool 1 60000", "unittests:repairable_tool 1 60000"}
 	}
-	minetest.log("info", "[unittests] repairable tool crafting input: "..dump(input))
-	output, decremented_input = minetest.get_craft_result(input)
-	minetest.log("info", "[unittests] repairable tool crafting output: "..dump(output))
-	minetest.log("info", "[unittests] repairable tool crafting decremented input: "..dump(decremented_input))
+	core.log("info", "[unittests] repairable tool crafting input: "..dump(input))
+	output, decremented_input = core.get_craft_result(input)
+	core.log("info", "[unittests] repairable tool crafting output: "..dump(output))
+	core.log("info", "[unittests] repairable tool crafting decremented input: "..dump(decremented_input))
 	assert(output.item)
-	minetest.log("info", "[unittests] repairable tool crafting output.item:to_table(): "..dump(output.item:to_table()))
+	core.log("info", "[unittests] repairable tool crafting output.item:to_table(): "..dump(output.item:to_table()))
 	assert(output.item:get_name() == "unittests:repairable_tool")
 	-- Test the wear value.
-	-- See src/craftdef.cpp in Minetest source code for the formula. The formula to calculate
+	-- See src/craftdef.cpp in Luanti source code for the formula. The formula to calculate
 	-- the value 51187 is:
 	--    65536 - ((65536-60000)+(65536-60000)) + floor(additonal_wear * 65536 + 0.5) = 51187
 	-- where additional_wear = 0.05
@@ -100,21 +100,75 @@ local function test_get_craft_result()
 		width = 2,
 		items = {"unittests:unrepairable_tool 1 60000", "unittests:unrepairable_tool 1 60000"}
 	}
-	minetest.log("info", "[unittests] unrepairable tool crafting input: "..dump(input))
-	output, decremented_input = minetest.get_craft_result(input)
-	minetest.log("info", "[unittests] unrepairable tool crafting output: "..dump(output))
-	minetest.log("info", "[unittests] unrepairable tool crafting decremented input: "..dump(decremented_input))
+	core.log("info", "[unittests] unrepairable tool crafting input: "..dump(input))
+	output, decremented_input = core.get_craft_result(input)
+	core.log("info", "[unittests] unrepairable tool crafting output: "..dump(output))
+	core.log("info", "[unittests] unrepairable tool crafting decremented input: "..dump(decremented_input))
 	assert(output.item)
-	minetest.log("info", "[unittests] unrepairable tool crafting output.item:to_table(): "..dump(output.item:to_table()))
+	core.log("info", "[unittests] unrepairable tool crafting output.item:to_table(): "..dump(output.item:to_table()))
 	-- unrepairable tool must not yield any output
-	assert(output.item:get_name() == "")
+	assert(output.item:is_empty())
+end
+unittests.register("test_get_craft_result", test_get_craft_result)
+
+
+local function test_get_all_craft_recipes()
+	-- cooking
+	local output
+
+	output = "unittests:steel_ingot"
+	do
+		local recipes = core.get_all_craft_recipes(output)
+
+		core.log("info", "[unittests] cooking recipes="..dump(recipes))
+		local found
+		for _, recipe in ipairs(recipes) do
+			if recipe.type == "cooking" and recipe.items[1] == "unittests:iron_lump" then
+				assert(found == nil, "found too many")
+				found = recipe
+			end
+		end
+		assert(found)
+		assert(ItemStack(found.output) == ItemStack(output)) -- handle aliases
+		assert(found.time == 10) -- cooktime
+	end
+
+	-- fuel
+	output = ""
+	do
+		local recipes = core.get_all_craft_recipes(output)
+		core.log("info", "[unittests] fuel recipes="..dump(recipes))
+		local found
+		for _, recipe in ipairs(recipes) do
+			if recipe.type == "fuel" and recipe.items[1] == "unittests:coal_lump" then
+				assert(found == nil, "found too many")
+				found = recipe
+			end
+		end
+		assert(found)
+		assert(ItemStack(found.output) == ItemStack(output)) -- handle aliases
+		assert(found.time == 40) -- burntime
+	end
+
+	-- shaped
+	output = "unittests:iron_lump"
+	do
+		local recipes = core.get_all_craft_recipes(output)
+		core.log("info", "[unittests] shaped recipes="..dump(recipes))
+		local found
+		for _, recipe in ipairs(recipes) do
+			if recipe.type == "normal" and recipe.items[1] == "unittests:steel_ingot" then
+				assert(found == nil, "found too many")
+				found = recipe
+			end
+		end
+		assert(found)
+		assert(#found.items == 1)
+		assert(ItemStack(found.output) == ItemStack(output)) -- handle aliases
+		core.assert_same(found.replacements, {{"unittests:steel_ingot", "unittests:coal_lump"}})
+	end
+
 
 end
-
-function unittests.test_crafting()
-	test_clear_craft()
-	test_get_craft_result()
-	minetest.log("action", "[unittests] Crafting tests passed!")
-	return true
-end
+unittests.register("test_get_all_craft_recipes", test_get_all_craft_recipes)
 

@@ -1,27 +1,21 @@
 // Copyright (C) 2002-2012 Nikolaus Gebhardt
-// Copyright (C) 2016 Nathanaël Courant:
+// Copyright (C) 2016 Nathanaëlle Courant:
 //   Modified the functions to use EnrichedText instead of string.
 // This file is part of the "Irrlicht Engine".
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
 #include "static_text.h"
-#ifdef _IRR_COMPILE_WITH_GUI_
 
+#include <dimension2d.h>
+#include <EGUIAlignment.h>
 #include <IGUIFont.h>
 #include <IVideoDriver.h>
 #include <rect.h>
 #include <SColor.h>
 
-#if USE_FREETYPE
-	#include "CGUITTFont.h"
-#endif
+#include "CGUITTFont.h"
+#include "util/enriched_string.h"
 
-#include "util/string.h"
-
-namespace irr
-{
-
-#if USE_FREETYPE
 
 namespace gui
 {
@@ -36,10 +30,6 @@ StaticText::StaticText(const EnrichedString &text, bool border,
 	RestrainTextInside(true), RightToLeft(false),
 	OverrideFont(0), LastBreakFont(0)
 {
-	#ifdef _DEBUG
-	setDebugName("StaticText");
-	#endif
-
 	setText(text);
 }
 
@@ -79,55 +69,27 @@ void StaticText::draw()
 
 	// draw the text
 	IGUIFont *font = getActiveFont();
-	if (font && BrokenText.size()) {
+	if (font && !BrokenText.empty()) {
 		if (font != LastBreakFont)
 			updateText();
 
 		core::rect<s32> r = frameRect;
-		s32 height_line = font->getDimension(L"A").Height + font->getKerningHeight();
-		s32 height_total = height_line * BrokenText.size();
-		if (VAlign == EGUIA_CENTER && WordWrap)
-		{
-			r.UpperLeftCorner.Y = r.getCenter().Y - (height_total / 2);
-		}
-		else if (VAlign == EGUIA_LOWERRIGHT)
-		{
-			r.UpperLeftCorner.Y = r.LowerRightCorner.Y - height_total;
-		}
-		if (HAlign == EGUIA_LOWERRIGHT)
-		{
-			r.UpperLeftCorner.X = r.LowerRightCorner.X -
-				getTextWidth();
+		const auto text_dim = getTextDimensions();
+		if (VAlign == EGUIA_CENTER) {
+			r.UpperLeftCorner.Y = r.getCenter().Y - (text_dim.Height / 2);
+		} else if (VAlign == EGUIA_LOWERRIGHT) {
+			r.UpperLeftCorner.Y = r.LowerRightCorner.Y - text_dim.Height;
 		}
 
-		irr::video::SColor previous_color(255, 255, 255, 255);
-		for (const EnrichedString &str : BrokenText) {
-			if (HAlign == EGUIA_LOWERRIGHT)
-			{
-				r.UpperLeftCorner.X = frameRect.LowerRightCorner.X -
-					font->getDimension(str.c_str()).Width;
-			}
-
-#if USE_FREETYPE
-			if (font->getType() == irr::gui::EGFT_CUSTOM) {
-				irr::gui::CGUITTFont *tmp = static_cast<irr::gui::CGUITTFont*>(font);
-				tmp->draw(str,
-					r, HAlign == EGUIA_CENTER, VAlign == EGUIA_CENTER,
-					(RestrainTextInside ? &AbsoluteClippingRect : NULL));
-			} else
-#endif
-			{
-				// Draw non-colored text
-				font->draw(str.c_str(),
-					r, str.getDefaultColor(), // TODO: Implement colorization
-					HAlign == EGUIA_CENTER, VAlign == EGUIA_CENTER,
-					(RestrainTextInside ? &AbsoluteClippingRect : NULL));
-			}
-
-
-			r.LowerRightCorner.Y += height_line;
-			r.UpperLeftCorner.Y += height_line;
+		if (HAlign == EGUIA_CENTER) {
+			r.UpperLeftCorner.X = r.getCenter().X - (text_dim.Width / 2);
+		} else if (HAlign == EGUIA_LOWERRIGHT) {
+			r.UpperLeftCorner.X = r.LowerRightCorner.X - text_dim.Width;
 		}
+
+		IRR_DOWN_CAST<CGUITTFont *>(font)->draw(BrokenText, r,
+				false, false,
+				RestrainTextInside ? &AbsoluteClippingRect : nullptr);
 	}
 
 	IGUIElement::draw();
@@ -246,12 +208,10 @@ video::SColor StaticText::getOverrideColor() const
 	return ColoredText.getDefaultColor();
 }
 
-#if IRRLICHT_VERSION_MAJOR == 1 && IRRLICHT_VERSION_MINOR > 8
 video::SColor StaticText::getActiveColor() const
 {
 	return getOverrideColor();
 }
-#endif
 
 //! Sets if the static text should use the overide color or the
 //! color in the gui skin.
@@ -311,7 +271,7 @@ void StaticText::updateText()
 		setDrawBackground(false);
 
 	if (!WordWrap) {
-		BrokenText.push_back(cText);
+		BrokenText = cText;
 		return;
 	}
 
@@ -334,7 +294,11 @@ void StaticText::updateText()
 		elWidth -= 2*skin->getSize(EGDS_TEXT_DISTANCE_X);
 	wchar_t c;
 
-	//std::vector<irr::video::SColor> colors;
+	const auto add_line = [&](const EnrichedString &l) {
+		if (!BrokenText.empty())
+			BrokenText.addCharNoColor('\n');
+		BrokenText += l;
+	};
 
 	// We have to deal with right-to-left and left-to-right differently
 	// However, most parts of the following code is the same, it's just
@@ -350,11 +314,6 @@ void StaticText::updateText()
 			if (c == L'\r') // Mac or Windows breaks
 			{
 				lineBreak = true;
-				//if (Text[i+1] == L'\n') // Windows breaks
-				//{
-				//	Text.erase(i+1);
-				//	--size;
-				//}
 				c = '\0';
 			}
 			else if (c == L'\n') // Unix breaks
@@ -367,7 +326,6 @@ void StaticText::updateText()
 			if ( !isWhitespace )
 			{
 				// part of a word
-				//word += c;
 				word.addChar(cText, i);
 			}
 
@@ -392,7 +350,7 @@ void StaticText::updateText()
 							EnrichedString first = word.substr(0, where);
 							EnrichedString second = word.substr(where, word.size() - where);
 							first.addCharNoColor(L'-');
-							BrokenText.push_back(line + first);
+							add_line(line + first);
 							const s32 secondLength = font->getDimension(second.c_str()).Width;
 
 							length = secondLength;
@@ -403,7 +361,7 @@ void StaticText::updateText()
 							// No soft hyphen found, so there's nothing more we can do
 							// break to next line
 							if (length)
-								BrokenText.push_back(line);
+								add_line(line);
 							length = wordlgth;
 							line = word;
 						}
@@ -411,7 +369,7 @@ void StaticText::updateText()
 					else if (length && (length + wordlgth + whitelgth > elWidth))
 					{
 						// break to next line
-						BrokenText.push_back(line);
+						add_line(line);
 						length = wordlgth;
 						line = word;
 					}
@@ -437,7 +395,7 @@ void StaticText::updateText()
 				{
 					line += whitespace;
 					line += word;
-					BrokenText.push_back(line);
+					add_line(line);
 					line.clear();
 					word.clear();
 					whitespace.clear();
@@ -448,7 +406,7 @@ void StaticText::updateText()
 
 		line += whitespace;
 		line += word;
-		BrokenText.push_back(line);
+		add_line(line);
 	}
 	else
 	{
@@ -461,11 +419,6 @@ void StaticText::updateText()
 			if (c == L'\r') // Mac or Windows breaks
 			{
 				lineBreak = true;
-				//if ((i>0) && Text[i-1] == L'\n') // Windows breaks
-				//{
-				//	Text.erase(i-1);
-				//	--size;
-				//}
 				c = '\0';
 			}
 			else if (c == L'\n') // Unix breaks
@@ -486,7 +439,7 @@ void StaticText::updateText()
 					if (length && (length + wordlgth + whitelgth > elWidth))
 					{
 						// break to next line
-						BrokenText.push_back(line);
+						add_line(line);
 						length = wordlgth;
 						line = word;
 					}
@@ -511,7 +464,7 @@ void StaticText::updateText()
 				{
 					line = whitespace + line;
 					line = word + line;
-					BrokenText.push_back(line);
+					add_line(line);
 					line.clear();
 					word.clear();
 					whitespace.clear();
@@ -528,7 +481,7 @@ void StaticText::updateText()
 
 		line = whitespace + line;
 		line = word + line;
-		BrokenText.push_back(line);
+		add_line(line);
 	}
 }
 
@@ -552,91 +505,11 @@ void StaticText::updateAbsolutePosition()
 	updateText();
 }
 
-
-//! Returns the height of the text in pixels when it is drawn.
-s32 StaticText::getTextHeight() const
+core::dimension2du StaticText::getTextDimensions() const
 {
-	IGUIFont* font = getActiveFont();
-	if (!font)
-		return 0;
-
-	if (WordWrap) {
-		s32 height = font->getDimension(L"A").Height + font->getKerningHeight();
-		return height * BrokenText.size();
-	}
-	// There may be intentional new lines without WordWrap
-	return font->getDimension(BrokenText[0].c_str()).Height;
-}
-
-
-s32 StaticText::getTextWidth() const
-{
-	IGUIFont *font = getActiveFont();
-	if (!font)
-		return 0;
-
-	s32 widest = 0;
-
-	for (const EnrichedString &line : BrokenText) {
-		s32 width = font->getDimension(line.c_str()).Width;
-
-		if (width > widest)
-			widest = width;
-	}
-
-	return widest;
-}
-
-
-//! Writes attributes of the element.
-//! Implement this to expose the attributes of your element for
-//! scripting languages, editors, debuggers or xml serialization purposes.
-void StaticText::serializeAttributes(io::IAttributes* out, io::SAttributeReadWriteOptions* options=0) const
-{
-	IGUIStaticText::serializeAttributes(out,options);
-
-	out->addBool	("Border",              Border);
-	out->addBool	("OverrideColorEnabled",true);
-	out->addBool	("OverrideBGColorEnabled",ColoredText.hasBackground());
-	out->addBool	("WordWrap",		WordWrap);
-	out->addBool	("Background",          Background);
-	out->addBool	("RightToLeft",         RightToLeft);
-	out->addBool	("RestrainTextInside",  RestrainTextInside);
-	out->addColor	("OverrideColor",       ColoredText.getDefaultColor());
-	out->addColor	("BGColor",       	ColoredText.getBackground());
-	out->addEnum	("HTextAlign",          HAlign, GUIAlignmentNames);
-	out->addEnum	("VTextAlign",          VAlign, GUIAlignmentNames);
-
-	// out->addFont ("OverrideFont",	OverrideFont);
-}
-
-
-//! Reads attributes of the element
-void StaticText::deserializeAttributes(io::IAttributes* in, io::SAttributeReadWriteOptions* options=0)
-{
-	IGUIStaticText::deserializeAttributes(in,options);
-
-	Border = in->getAttributeAsBool("Border");
-	setWordWrap(in->getAttributeAsBool("WordWrap"));
-	Background = in->getAttributeAsBool("Background");
-	RightToLeft = in->getAttributeAsBool("RightToLeft");
-	RestrainTextInside = in->getAttributeAsBool("RestrainTextInside");
-	if (in->getAttributeAsBool("OverrideColorEnabled"))
-		ColoredText.setDefaultColor(in->getAttributeAsColor("OverrideColor"));
-	if (in->getAttributeAsBool("OverrideBGColorEnabled"))
-		ColoredText.setBackground(in->getAttributeAsColor("BGColor"));
-
-	setTextAlignment( (EGUI_ALIGNMENT) in->getAttributeAsEnumeration("HTextAlign", GUIAlignmentNames),
-                      (EGUI_ALIGNMENT) in->getAttributeAsEnumeration("VTextAlign", GUIAlignmentNames));
-
-	// OverrideFont = in->getAttributeAsFont("OverrideFont");
+	if (const auto font = getActiveFont())
+		return font->getDimension(BrokenText.c_str());
+	return core::dimension2du();
 }
 
 } // end namespace gui
-
-#endif // USE_FREETYPE
-
-} // end namespace irr
-
-
-#endif // _IRR_COMPILE_WITH_GUI_

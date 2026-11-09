@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "test.h"
 
@@ -23,6 +8,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 
 #include "gamedef.h"
 #include "inventory.h"
+#include "dummygamedef.h"
+#include "itemdef.h"
 
 class TestInventory : public TestBase {
 public:
@@ -31,7 +18,8 @@ public:
 
 	void runTests(IGameDef *gamedef);
 
-	void testSerializeDeserialize(IItemDefManager *idef);
+	void testItemStack(IWritableItemDefManager *widef);
+	void testSerializeDeserialize(const IItemDefManager *idef);
 
 	static const char *serialized_inventory_in;
 	static const char *serialized_inventory_out;
@@ -42,12 +30,77 @@ static TestInventory g_test_instance;
 
 void TestInventory::runTests(IGameDef *gamedef)
 {
+	DummyGameDef *g = dynamic_cast<DummyGameDef*>(gamedef); // this is kinda stupid
+	sanity_check(g);
+
+	TEST(testItemStack, g->getWritableItemDefManager());
 	TEST(testSerializeDeserialize, gamedef->getItemDefManager());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void TestInventory::testSerializeDeserialize(IItemDefManager *idef)
+void TestInventory::testItemStack(IWritableItemDefManager *widef)
+{
+	const IItemDefManager *idef = widef;
+
+	// Craftitem / Node
+	{
+		ItemStack stack;
+		std::istringstream is("foo:bar_baz", std::ios::binary);
+		stack.deSerialize(is, idef);
+
+		UASSERT(stack.name == "foo:bar_baz");
+		UASSERT(stack.count == 1);
+		UASSERT(stack.wear == 0);
+
+		// Surplus spaces are NOT ignored. Count defaults to 1. "10" goes nowhere.
+		is = std::istringstream("foo:bar_baz   10", std::ios::binary);
+		stack.deSerialize(is, idef);
+
+		UASSERT(stack.name == "foo:bar_baz");
+		UASSERT(stack.count == 1);
+		UASSERT(stack.wear == 0);
+
+	}
+
+	// Tool
+	{
+		ItemDefinition def;
+		def.name = "foo:bar_tool";
+		def.type = ItemType::ITEM_TOOL;
+		widef->registerItem(def);
+
+		ItemStack stack;
+		std::istringstream is("foo:bar_tool 10 4321", std::ios::binary);
+		stack.deSerialize(is, idef);
+
+		UASSERT(stack.name == "foo:bar_tool");
+		UASSERT(stack.count == 1); // tools cannot stack
+		UASSERT(stack.wear == 4321);
+
+		widef->unregisterItem(def.name);
+	}
+
+	// Obscurities
+	{
+		// Unsigned underflow
+		ItemStack stack;
+		std::istringstream is("foo:negative -6 -4321", std::ios::binary);
+		stack.deSerialize(is, idef);
+
+		UASSERTEQ(s32, stack.count, UINT16_MAX -    6 + 1);
+		UASSERTEQ(s32, stack.wear,  UINT16_MAX - 4321 + 1);
+
+		// Unsigned overflow
+		is = std::istringstream("foo:overflow 65537 65538", std::ios::binary);
+		stack.deSerialize(is, idef);
+
+		UASSERT(stack.count == 1);
+		UASSERT(stack.wear == 2);
+	}
+}
+
+void TestInventory::testSerializeDeserialize(const IItemDefManager *idef)
 {
 	Inventory inv(idef);
 	std::istringstream is(serialized_inventory_in, std::ios::binary);

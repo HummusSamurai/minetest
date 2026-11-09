@@ -1,30 +1,18 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
+#include <cassert>
 #include <unordered_set>
+#include <optional>
+#include <queue>
+#include "AnimSpec.h"
 #include "irrlichttypes_bloated.h"
 #include "activeobject.h"
-#include "inventorymanager.h"
 #include "itemgroup.h"
-#include "util/container.h"
+
 
 /*
 
@@ -47,6 +35,8 @@ struct ItemStack;
 struct ToolCapabilities;
 struct ObjectProperties;
 struct PlayerHPChangeReason;
+class Inventory;
+struct InventoryLocation;
 
 class ServerActiveObject : public ActiveObject
 {
@@ -65,25 +55,16 @@ public:
 	virtual void addedToEnvironment(u32 dtime_s){};
 	// Called before removing from environment
 	virtual void removingFromEnvironment(){};
-	// Returns true if object's deletion is the job of the
-	// environment
-	virtual bool environmentDeletes() const
-	{ return true; }
 
 	// Safely mark the object for removal or deactivation
 	void markForRemoval();
 	void markForDeactivation();
 
-	// Create a certain type of ServerActiveObject
-	static ServerActiveObject* create(ActiveObjectType type,
-			ServerEnvironment *env, u16 id, v3f pos,
-			const std::string &data);
-
 	/*
 		Some simple getters/setters
 	*/
 	v3f getBasePosition() const { return m_base_position; }
-	void setBasePosition(v3f pos){ m_base_position = pos; }
+	void setBasePosition(v3f pos);
 	ServerEnvironment* getEnv(){ return m_env; }
 
 	/*
@@ -92,6 +73,8 @@ public:
 
 	virtual void setPos(const v3f &pos)
 		{ setBasePosition(pos); }
+	virtual void addPos(const v3f &added_pos)
+		{ setBasePosition(m_base_position + added_pos); }
 	// continuous: if true, object does not stop immediately at pos
 	virtual void moveTo(v3f pos, bool continuous)
 		{ setBasePosition(pos); }
@@ -145,11 +128,12 @@ public:
 	virtual bool shouldUnload() const
 	{ return true; }
 
-	// Returns tool wear
-	virtual u16 punch(v3f dir,
-			const ToolCapabilities *toolcap = nullptr,
+	// Returns added tool wear
+	virtual u32 punch(v3f dir,
+			const ToolCapabilities &toolcap,
 			ServerActiveObject *puncher = nullptr,
-			float time_from_last_punch = 1000000.0f)
+			float time_from_last_punch = 1000000.0f,
+			u16 initial_wear = 0)
 	{ return 0; }
 	virtual void rightClick(ServerActiveObject *clicker)
 	{}
@@ -158,24 +142,38 @@ public:
 	virtual u16 getHP() const
 	{ return 0; }
 
+	/// @brief Returns a unique ID for this object (persistent across unload, server restarts).
+	/// @note Because these strings are very short, copying them is not expensive.
+	virtual std::string getGUID() const = 0;
+
 	virtual void setArmorGroups(const ItemGroupList &armor_groups)
 	{}
 	virtual const ItemGroupList &getArmorGroups() const
 	{ static ItemGroupList rv; return rv; }
-	virtual void setAnimation(v2f frames, float frame_speed, float frame_blend, bool frame_loop)
+
+	// Animation
+
+	virtual void setAnimation(const scene::TrackId &track, scene::TrackAnimSpec anim_spec)
 	{}
-	virtual void getAnimation(v2f *frames, float *frame_speed, float *frame_blend, bool *frame_loop)
+	virtual void stopAnimation(const scene::TrackId &track)
 	{}
-	virtual void setAnimationSpeed(float frame_speed)
+	virtual std::vector<std::pair<scene::TrackId, scene::TrackAnimSpec>> getAllAnimations() const
+	{ return {}; }
+	virtual std::optional<scene::TrackAnimSpec> getAnimation(const scene::TrackId &track) const
+	{ return std::nullopt; }
+	virtual void setAnimationSpeed(const scene::TrackId &track, f32 fps)
 	{}
-	virtual void setBonePosition(const std::string &bone, v3f position, v3f rotation)
+
+	virtual void setBoneOverride(const std::string &bone, const BoneOverride &props)
 	{}
-	virtual void getBonePosition(const std::string &bone, v3f *position, v3f *lotation)
-	{}
-	virtual const std::unordered_set<int> &getAttachmentChildIds() const
-	{ static std::unordered_set<int> rv; return rv; }
+	virtual BoneOverride getBoneOverride(const std::string &bone)
+	{ BoneOverride props; return props; }
+	virtual const BoneOverrideMap &getBoneOverrides() const
+	{ static BoneOverrideMap rv; return rv; }
+	virtual const std::unordered_set<object_t> &getAttachmentChildIds() const
+	{ static std::unordered_set<object_t> rv; return rv; }
 	virtual ServerActiveObject *getParent() const { return nullptr; }
-	virtual ObjectProperties* accessObjectProperties()
+	virtual ObjectProperties *accessObjectProperties()
 	{ return NULL; }
 	virtual void notifyObjectPropertiesModified()
 	{}
@@ -183,8 +181,7 @@ public:
 	// Inventory and wielded item
 	virtual Inventory *getInventory() const
 	{ return NULL; }
-	virtual InventoryLocation getInventoryLocation() const
-	{ return InventoryLocation(); }
+	virtual InventoryLocation getInventoryLocation() const;
 	virtual void setInventoryModified()
 	{}
 	virtual std::string getWieldList() const
@@ -226,6 +223,10 @@ public:
 
 	/*
 		Whether the object's static data has been stored to a block
+
+		Note that `!isStaticAllowed() && m_static_exists` is a valid state
+		(though it usually doesn't persist long) and you need to be careful
+		about handling it.
 	*/
 	bool m_static_exists = false;
 	/*
@@ -234,20 +235,34 @@ public:
 	*/
 	v3s16 m_static_block = v3s16(1337,1337,1337);
 
+	// Names of players to whom the object is to be sent, not considering parents.
+	using Observers = std::optional<std::unordered_set<std::string>>;
+	Observers m_observers;
+
+	/// Invalidate final observer cache. This needs to be done whenever
+	/// the observers of this object or any of its ancestors may have changed.
+	void invalidateEffectiveObservers();
+	/// Cache `m_effective_observers` with the names of all observers,
+	/// also indirect observers (object attachment chain).
+	const Observers &getEffectiveObservers();
+	/// Force a recalculation of final observers (including all parents).
+	const Observers &recalculateEffectiveObservers();
+	/// Whether the object is sent to `player_name`
+	bool isEffectivelyObservedBy(const std::string &player_name);
+
 protected:
+	// Cached intersection of m_observers of this object and all its parents.
+	std::optional<Observers> m_effective_observers;
+
 	virtual void onMarkedForDeactivation() {}
 	virtual void onMarkedForRemoval() {}
 
-	virtual void onAttach(int parent_id) {}
-	virtual void onDetach(int parent_id) {}
-
 	ServerEnvironment *m_env;
-	v3f m_base_position;
 	std::unordered_set<u32> m_attached_particle_spawners;
 
 	/*
 		Same purpose as m_pending_removal but for deactivation.
-		deactvation = save static data in block, remove active object
+		deactivation = save static data in block, remove active object
 
 		If this is set alongside with m_pending_removal, removal takes
 		priority.
@@ -259,7 +274,7 @@ protected:
 		- Whether this object is to be removed when nobody knows about
 		  it anymore.
 		- Removal is delayed to preserve the id for the time during which
-		  it could be confused to some other object by some client.
+		  it could be confused with some other object by some client.
 		- This is usually set to true by the step() method when the object wants
 		  to be deleted but can be set by anything else too.
 		Note: Do not assign this directly, use markForRemoval() instead.
@@ -270,4 +285,7 @@ protected:
 		Queue of messages to be sent to the client
 	*/
 	std::queue<ActiveObjectMessage> m_messages_out;
+
+private:
+	v3f m_base_position; // setBasePosition updates index and MUST be called
 };

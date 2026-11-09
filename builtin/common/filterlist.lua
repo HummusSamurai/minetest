@@ -1,27 +1,14 @@
---Minetest
---Copyright (C) 2013 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2013 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 --------------------------------------------------------------------------------
 -- TODO improve doc                                                           --
 -- TODO code cleanup                                                          --
 -- Generic implementation of a filter/sortable list                           --
 -- Usage:                                                                     --
--- Filterlist needs to be initialized on creation. To achieve this you need to --
--- pass following functions:                                                  --
+-- Filterlist needs to be initialized on creation. To achieve this you need   --
+-- to pass following functions:                                               --
 -- raw_fct() (mandatory):                                                     --
 --     function returning a table containing the elements to be filtered      --
 -- compare_fct(element1,element2) (mandatory):                                --
@@ -31,7 +18,7 @@
 -- filter_fct(element,filtercriteria) (optional)                              --
 --     function returning true/false if filtercriteria met to element         --
 -- fetch_param (optional)                                                     --
---     parameter passed to raw_fct to aquire correct raw data                 --
+--     parameter passed to raw_fct to acquire correct raw data                --
 --                                                                            --
 --------------------------------------------------------------------------------
 filterlist = {}
@@ -279,41 +266,5 @@ function sort_worlds_alphabetic(self)
 			return a.name < b.name
 		end
 		return a.name:lower() < b.name:lower()
-	end)
-end
-
---------------------------------------------------------------------------------
-function sort_mod_list(self)
-
-	table.sort(self.m_processed_list, function(a, b)
-		-- Show game mods at bottom
-		if a.type ~= b.type or a.loc ~= b.loc then
-			if b.type == "game" then
-				return a.loc ~= "game"
-			end
-			return b.loc == "game"
-		end
-		-- If in same or no modpack, sort by name
-		if a.modpack == b.modpack then
-			if a.name:lower() == b.name:lower() then
-				return a.name < b.name
-			end
-			return a.name:lower() < b.name:lower()
-		-- Else compare name to modpack name
-		else
-			-- Always show modpack pseudo-mod on top of modpack mod list
-			if a.name == b.modpack then
-				return true
-			elseif b.name == a.modpack then
-				return false
-			end
-
-			local name_a = a.modpack or a.name
-			local name_b = b.modpack or b.name
-			if name_a:lower() == name_b:lower() then
-				return  name_a < name_b
-			end
-			return name_a:lower() < name_b:lower()
-		end
 	end)
 end

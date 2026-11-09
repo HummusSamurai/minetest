@@ -1,29 +1,13 @@
-/*
-Minetest
-Copyright (C) 2015-2019 paramat
-Copyright (C) 2015-2016 kwolekr, Ryan Kwolek
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2015-2019 paramat
+// Copyright (C) 2015-2016 kwolekr, Ryan Kwolek
 
 
 #include "mapgen.h"
 #include <cmath>
 #include "voxel.h"
 #include "noise.h"
-#include "mapblock.h"
 #include "mapnode.h"
 #include "map.h"
 #include "nodedef.h"
@@ -39,10 +23,12 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "mapgen_fractal.h"
 
 
-FlagDesc flagdesc_mapgen_fractal[] = {
+const FlagDesc flagdesc_mapgen_fractal[] = {
 	{"terrain", MGFRACTAL_TERRAIN},
 	{NULL,      0}
 };
+
+static bool is_zero(float value) { return std::fabs(value) < 0.000000001f; }
 
 ///////////////////////////////////////////////////////////////////////////////////////
 
@@ -118,8 +104,17 @@ void MapgenFractalParams::readParams(const Settings *settings)
 	settings->getS16NoEx("mgfractal_dungeon_ymax",         dungeon_ymax);
 	settings->getU16NoEx("mgfractal_fractal",              fractal);
 	settings->getU16NoEx("mgfractal_iterations",           iterations);
-	settings->getV3FNoEx("mgfractal_scale",                scale);
-	settings->getV3FNoEx("mgfractal_offset",               offset);
+
+	std::optional<v3f> mgfractal_scale;
+	if (settings->getV3FNoEx("mgfractal_scale", mgfractal_scale) && mgfractal_scale.has_value()) {
+		scale = *mgfractal_scale;
+	}
+
+	std::optional<v3f> mgfractal_offset;
+	if (settings->getV3FNoEx("mgfractal_offset", mgfractal_offset) && mgfractal_offset.has_value()) {
+		offset = *mgfractal_offset;
+	}
+
 	settings->getFloatNoEx("mgfractal_slice_w",            slice_w);
 	settings->getFloatNoEx("mgfractal_julia_x",            julia_x);
 	settings->getFloatNoEx("mgfractal_julia_y",            julia_y);
@@ -131,6 +126,7 @@ void MapgenFractalParams::readParams(const Settings *settings)
 	settings->getNoiseParams("mgfractal_np_cave1",        np_cave1);
 	settings->getNoiseParams("mgfractal_np_cave2",        np_cave2);
 	settings->getNoiseParams("mgfractal_np_dungeons",     np_dungeons);
+	iterations = std::max<u16>(iterations, 1);
 }
 
 
@@ -182,7 +178,7 @@ int MapgenFractal::getSpawnLevelAtPoint(v2s16 p)
 
 	// If terrain present, don't start search below terrain or water level
 	if (noise_seabed) {
-		s16 seabed_level = NoisePerlin2D(&noise_seabed->np, p.X, p.Y, seed);
+		s16 seabed_level = NoiseFractal2D(&noise_seabed->np, p.X, p.Y, seed);
 		search_start = MYMAX(search_start, MYMAX(seabed_level, water_level));
 	}
 
@@ -307,83 +303,83 @@ bool MapgenFractal::getFractalAtPoint(s16 x, s16 y, s16 z)
 		switch (formula) {
 		default:
 		case 1: // 4D "Roundy"
-			nx = ox * ox - oy * oy - oz * oz - ow * ow + cx;
+			nx = sqr(ox) - sqr(oy) - sqr(oz) - sqr(ow) + cx;
 			ny = 2.0f * (ox * oy + oz * ow) + cy;
 			nz = 2.0f * (ox * oz + oy * ow) + cz;
 			nw = 2.0f * (ox * ow + oy * oz) + cw;
 			break;
 		case 2: // 4D "Squarry"
-			nx = ox * ox - oy * oy - oz * oz - ow * ow + cx;
+			nx = sqr(ox) - sqr(oy) - sqr(oz) - sqr(ow) + cx;
 			ny = 2.0f * (ox * oy + oz * ow) + cy;
 			nz = 2.0f * (ox * oz + oy * ow) + cz;
 			nw = 2.0f * (ox * ow - oy * oz) + cw;
 			break;
 		case 3: // 4D "Mandy Cousin"
-			nx = ox * ox - oy * oy - oz * oz + ow * ow + cx;
+			nx = sqr(ox) - sqr(oy) - sqr(oz) + sqr(ow) + cx;
 			ny = 2.0f * (ox * oy + oz * ow) + cy;
 			nz = 2.0f * (ox * oz + oy * ow) + cz;
 			nw = 2.0f * (ox * ow + oy * oz) + cw;
 			break;
 		case 4: // 4D "Variation"
-			nx = ox * ox - oy * oy - oz * oz - ow * ow + cx;
+			nx = sqr(ox) - sqr(oy) - sqr(oz) - sqr(ow) + cx;
 			ny = 2.0f * (ox * oy + oz * ow) + cy;
 			nz = 2.0f * (ox * oz - oy * ow) + cz;
 			nw = 2.0f * (ox * ow + oy * oz) + cw;
 			break;
 		case 5: // 3D "Mandelbrot/Mandelbar"
-			nx = ox * ox - oy * oy - oz * oz + cx;
+			nx = sqr(ox) - sqr(oy) - sqr(oz) + cx;
 			ny = 2.0f * ox * oy + cy;
 			nz = -2.0f * ox * oz + cz;
 			break;
 		case 6: // 3D "Christmas Tree"
 			// Altering the formula here is necessary to avoid division by zero
-			if (std::fabs(oz) < 0.000000001f) {
-				nx = ox * ox - oy * oy - oz * oz + cx;
+			if (is_zero(oz)) {
+				nx = sqr(ox) - sqr(oy) - sqr(oz) + cx;
 				ny = 2.0f * oy * ox + cy;
 				nz = 4.0f * oz * ox + cz;
 			} else {
-				float a = (2.0f * ox) / (std::sqrt(oy * oy + oz * oz));
-				nx = ox * ox - oy * oy - oz * oz + cx;
+				float a = (2.0f * ox) / hypotf(ox, oy);
+				nx = sqr(ox) - sqr(oy) - sqr(oz) - sqr(ow) + cx;
 				ny = a * (oy * oy - oz * oz) + cy;
 				nz = a * 2.0f * oy * oz + cz;
 			}
 			break;
 		case 7: // 3D "Mandelbulb"
-			if (std::fabs(oy) < 0.000000001f) {
-				nx = ox * ox - oz * oz + cx;
+			if (is_zero(oy)) {
+				nx = sqr(ox) - sqr(oz) + cx;
 				ny = cy;
-				nz = -2.0f * oz * std::sqrt(ox * ox) + cz;
+				nz = -2.0f * oz * std::abs(ox) + cz;
 			} else {
-				float a = 1.0f - (oz * oz) / (ox * ox + oy * oy);
-				nx = (ox * ox - oy * oy) * a + cx;
+				float a = 1.0f - sqr(oz) / (sqr(ox) + sqr(oy));
+				nx = (sqr(ox) - sqr(oy)) * a + cx;
 				ny = 2.0f * ox * oy * a + cy;
-				nz = -2.0f * oz * std::sqrt(ox * ox + oy * oy) + cz;
+				nz = -2.0f * oz * hypotf(ox, oy) + cz;
 			}
 			break;
 		case 8: // 3D "Cosine Mandelbulb"
-			if (std::fabs(oy) < 0.000000001f) {
+			if (is_zero(oy)) {
 				nx = 2.0f * ox * oz + cx;
 				ny = 4.0f * oy * oz + cy;
-				nz = oz * oz - ox * ox - oy * oy + cz;
+				nz = sqr(oz) - sqr(ox) - sqr(oy) + cz;
 			} else {
-				float a = (2.0f * oz) / std::sqrt(ox * ox + oy * oy);
-				nx = (ox * ox - oy * oy) * a + cx;
+				float a = 2.0f * oz / hypotf(ox, oy);
+				nx = (sqr(ox) - sqr(oy)) * a + cx;
 				ny = 2.0f * ox * oy * a + cy;
-				nz = oz * oz - ox * ox - oy * oy + cz;
+				nz = sqr(oz) - sqr(ox) - sqr(oy) + cz;
 			}
 			break;
 		case 9: // 4D "Mandelbulb"
-			float rxy = std::sqrt(ox * ox + oy * oy);
-			float rxyz = std::sqrt(ox * ox + oy * oy + oz * oz);
-			if (std::fabs(ow) < 0.000000001f && std::fabs(oz) < 0.000000001f) {
-				nx = (ox * ox - oy * oy) + cx;
+			float rxy = hypotf(ox, oy);
+			float rxyz = std::sqrt(sqr(ox) + sqr(oy) + sqr(oz));
+			if (is_zero(ow) && is_zero(oz)) {
+				nx = sqr(ox) - sqr(oy) + cx;
 				ny = 2.0f * ox * oy + cy;
 				nz = -2.0f * rxy * oz + cz;
 				nw = 2.0f * rxyz * ow + cw;
 			} else {
-				float a = 1.0f - (ow * ow) / (rxyz * rxyz);
-				float b = a * (1.0f - (oz * oz) / (rxy * rxy));
-				nx = (ox * ox - oy * oy) * b + cx;
+				float a = 1.0f - sqr(ow) / sqr(rxyz);
+				float b = a * (1.0f - sqr(oz) / sqr(rxy));
+				nx = (sqr(ox) - sqr(oy)) * b + cx;
 				ny = 2.0f * ox * oy * b + cy;
 				nz = -2.0f * rxy * oz * a + cz;
 				nw = 2.0f * rxyz * ow + cw;
@@ -391,7 +387,7 @@ bool MapgenFractal::getFractalAtPoint(s16 x, s16 y, s16 z)
 			break;
 		}
 
-		if (nx * nx + ny * ny + nz * nz + nw * nw > 4.0f)
+		if (sqr(nx) + sqr(ny) + sqr(nz) + sqr(nw) > 4.0f)
 			return false;
 
 		ox = nx;
@@ -414,7 +410,7 @@ s16 MapgenFractal::generateTerrain()
 	u32 index2d = 0;
 
 	if (noise_seabed)
-		noise_seabed->perlinMap2D(node_min.X, node_min.Z);
+		noise_seabed->noiseMap2D(node_min.X, node_min.Z);
 
 	for (s16 z = node_min.Z; z <= node_max.Z; z++) {
 		for (s16 y = node_min.Y - 1; y <= node_max.Y + 1; y++) {

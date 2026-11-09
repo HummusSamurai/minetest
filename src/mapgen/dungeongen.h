@@ -1,22 +1,7 @@
-/*
-Minetest
-Copyright (C) 2010-2018 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2015-2018 paramat
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2018 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2015-2018 paramat
 
 #pragma once
 
@@ -56,10 +41,10 @@ struct DungeonParams {
 	bool only_in_ground;
 	// Number of rooms
 	u16 num_rooms;
-	// Room size random range. Includes walls / floor / ceilng
+	// Room size random range. Includes walls / floor / ceiling
 	v3s16 room_size_min;
 	v3s16 room_size_max;
-	// Large room size random range. Includes walls / floor / ceilng
+	// Large room size random range. Includes walls / floor / ceiling
 	v3s16 room_size_large_min;
 	v3s16 room_size_large_max;
 	// Value 0 disables large rooms.
@@ -68,7 +53,7 @@ struct DungeonParams {
 	// '1 in value' chance of being large.
 	u16 large_room_chance;
 	// Dimensions of 3D 'brush' that creates corridors.
-	// Dimensions are of the empty space, not including walls / floor / ceilng.
+	// Dimensions are of the empty space, not including walls / floor / ceiling.
 	// Diagonal corridors must have hole width >=2 to be passable.
 	// Currently, hole width >= 3 causes stair corridor bugs.
 	v3s16 holesize;
@@ -85,8 +70,8 @@ struct DungeonParams {
 class DungeonGen {
 public:
 	MMVManip *vm = nullptr;
-	const NodeDefManager *ndef;
-	GenerateNotifier *gennotify;
+	const NodeDefManager *ndef = nullptr;
+	GenerateNotifier *gennotify = nullptr;
 
 	u32 blockseed;
 	PseudoRandom random;

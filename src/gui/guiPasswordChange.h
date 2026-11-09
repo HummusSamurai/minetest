@@ -1,5 +1,5 @@
 /*
-Part of Minetest
+Part of Luanti
 Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 Copyright (C) 2013 Ciaran Gultnieks <ciaran@ciarang.com>
 
@@ -18,7 +18,6 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
 #include "modalMenu.h"
 #include <string>
 
@@ -31,9 +30,7 @@ public:
 	GUIPasswordChange(gui::IGUIEnvironment *env, gui::IGUIElement *parent, s32 id,
 			IMenuManager *menumgr, Client *client,
 			ISimpleTextureSource *tsrc);
-	~GUIPasswordChange();
 
-	void removeChildren();
 	/*
 		Remove and re-add (or reposition) stuff
 	*/
@@ -47,7 +44,7 @@ public:
 
 	bool OnEvent(const SEvent &event);
 #ifdef __ANDROID__
-	bool getAndroidUIInput();
+	void getAndroidUIInput();
 #endif
 
 protected:

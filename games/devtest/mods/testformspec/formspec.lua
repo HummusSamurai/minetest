@@ -1,4 +1,7 @@
-local color = minetest.colorize
+local color = core.colorize
+
+-- \208\176 is a cyrillic small a
+local unsafe_url = core.formspec_escape("https://u:p@wikipedi\208\176.org:1233/heIIoll?a=b#c")
 
 local clip_fs = [[
 	style_type[label,button,image_button,item_image_button,
@@ -6,7 +9,7 @@ local clip_fs = [[
 			,field,textarea,checkbox,dropdown;noclip=%c]
 
 	label[0,0;A clipping test]
-	button[0,1;3,0.8;clip_button;A clipping test]
+	button_url[0,1;3,0.8;clip_button;A clipping test;]] .. unsafe_url .. [[]
 	image_button[0,2;3,0.8;testformspec_button_image.png;clip_image_button;A clipping test]
 	item_image_button[0,3;3,0.8;testformspec:item;clip_item_image_button;A clipping test]
 	tabheader[0,4.7;3,0.63;clip_tabheader;Clip,Test,Text,Tabs;1;false;false]
@@ -61,14 +64,49 @@ local inv_style_fs = [[
 	list[current_player;main;.5,7;8,4]
 ]]
 
-local hypertext_basic = [[
+-- Some textures from textures/base/pack and Devtest, with many different sizes
+-- and aspect ratios.
+local image_column = "image,0=logo.png,1=crack_anylength.png^[invert:rgb,2=checkbox_16.png," ..
+		"3=checkbox_32.png,4=checkbox_64.png,5=default_lava.png," ..
+		"6=progress_bar.png,7=progress_bar_bg.png"
+local words = {
+	"esciunt", "repudiandae", "repellat", "voluptatem", "autem", "vitae", "et",
+	"minima", "quasi", "facere", "nihil", "ea", "nemo", "rem", "non", "eos",
+	"laudantium", "eveniet", "veritatis",
+}
+
+local reseed = math.random(2^31-1)
+math.randomseed(1337)
+
+local table_content = {}
+for i = 1, 100 do
+	table.insert(table_content, words[math.random(#words)])
+	table.insert(table_content, words[math.random(#words)])
+	table.insert(table_content, words[math.random(#words)])
+	table.insert(table_content, math.random(0, 7))
+	table.insert(table_content, math.random(0, 7))
+	table.insert(table_content, math.random(0, 7))
+	table.insert(table_content, words[math.random(#words)])
+end
+
+math.randomseed(reseed)
+
+local table_fs = table.concat({
+	"tablecolumns[text,align=left;text,align=right;text,align=center;",
+			image_column, ",align=left;",
+			image_column, ",align=right;",
+			image_column, ",align=center;text,align=right]",
+	"table[0,0;17,12;the_table;", table.concat(table_content, ","), ";1]"
+})
+
+local hypertext_basic = [[A hypertext element
 <bigger>Normal test</bigger>
 This is a normal text.
 
 <bigger><mono>style</mono> test</bigger>
-<style color=#FFFF00>Yellow text.</style> <style color=#FF0000>Red text.</style>
-<style size=24>Size 24.</style> <style size=16>Size 16</style>. <style size=12>Size 12.</style>
-<style font=normal>Normal font.</style> <style font=mono>Mono font.</style>
+<style color="#FFFF00">Yellow text.</style> <style color='#FF0000'>Red text.</style>
+<style size="24">Size 24.</style> <style size=16>Size 16</style>. <style size=12>Size 12.</style>
+<style font="normal">Normal font.</style> <style font=mono>Mono font.</style>
 
 <bigger>Tag test</bigger>
 <normal>normal</normal>
@@ -85,19 +123,20 @@ This is a normal text.
 
 <bigger>Custom tag test</bigger>
 <tag name=t_green color=green>
-<tag name=t_hover hovercolor=yellow>
-<tag name=t_size size=24>
-<tag name=t_mono font=mono>
-<tag name=t_multi color=green font=mono size=24>
+<tag name="t_hover" hovercolor=yellow>
+<tag name="t_size" size=24>
+<tag name="t_mono" font=mono>
+<tag name="t_multi" color=green font=mono size=24>
 <t_green>color=green</t_green>
-Action: <action name=color><t_green>color=green</t_green></action>
-Action: <action name=hovercolor><t_hover>hovercolor=yellow</t_hover></action>
+Action: <action name="color"><t_green>color=green</t_green></action>
+Action: <action name="hovercolor"><t_hover>hovercolor=yellow</t_hover></action>
+Action URL: <action name="open" url="https://example.com/?a=b#c">open URL</action>
 <t_size>size=24</t_size>
 <t_mono>font=mono</t_mono>
 <t_multi>color=green font=mono size=24</t_multi>
 
 <bigger><mono>action</mono> test</bigger>
-<action name=action_test>action</action>
+<action name="action_test">action</action>
 
 <bigger><mono>img</mono> test</bigger>
 Normal:
@@ -139,13 +178,13 @@ This is a test of the global tag. The parameters are:
 background=gray margin=20 valign=bottom halign=right color=pink hovercolor=purple size=12 font=mono
 <action name=global>action</action>]]
 
-local hypertext_fs = "hypertext[0,0;11,9;hypertext;"..minetest.formspec_escape(hypertext_basic).."]"..
-	"hypertext[0,9.5;11,2.5;hypertext;"..minetest.formspec_escape(hypertext_global).."]"
+local hypertext_fs = "hypertext[0,0;11,9;hypertext;"..core.formspec_escape(hypertext_basic).."]"..
+	"hypertext[0,9.5;11,2.5;hypertext;"..core.formspec_escape(hypertext_global).."]"
 
 local style_fs = [[
 	style[one_btn1;bgcolor=red;textcolor=yellow;bgcolor_hovered=orange;
 		bgcolor_pressed=purple]
-	button[0,0;2.5,0.8;one_btn1;Button]
+	button_url_exit[0,0;2.5,0.8;one_btn1;Button;]] .. unsafe_url .. [[]
 
 	style[one_btn2;border=false;textcolor=cyan] ]]..
 	"button[0,1.05;2.5,0.8;one_btn2;Text " .. color("#FF0", "Yellow") .. [[]
@@ -190,14 +229,17 @@ local style_fs = [[
 	style[one_btn14:hovered;bgimg=testformspec_bg_hovered.png;fgimg=testformspec_hovered.png;textcolor=yellow]
 	style[one_btn14:pressed;bgimg=testformspec_bg_pressed.png;fgimg=testformspec_pressed.png;textcolor=blue]
 	style[one_btn14:hovered+pressed;textcolor=purple]
+	style[one_btn14:focused;textcolor=red]
 	image_button[0,9.6;1,1;testformspec_button_image.png;one_btn14;Bg]
 
 	style[one_btn15;border=false;bgcolor=#1cc;bgimg=testformspec_bg.png;bgimg_hovered=testformspec_bg_hovered.png;bgimg_pressed=testformspec_bg_pressed.png]
 	item_image_button[1.25,9.6;1,1;testformspec:item;one_btn15;Bg]
 
-	style[one_btn16;border=false;bgimg=testformspec_bg_9slice.png;bgimg_hovered=testformspec_bg_9slice_hovered.png;bgimg_pressed=testformspec_bg_9slice_pressed.png;bgimg_middle=4,6]
-	button[2.5,9.6;2,1;one_btn16;9-Slice Bg]
-
+	style[one_btn16;border=false;bgimg=testformspec_bg_9slice.png;bgimg_middle=4,6;padding=5,7;fgimg=testformspec_bg.png;fgimg_middle=1]
+	style[one_btn16:hovered;bgimg=testformspec_bg_9slice_hovered.png;fgimg=testformspec_bg_hovered.png]
+	style[one_btn16:pressed;bgimg=testformspec_bg_9slice_pressed.png;fgimg=testformspec_bg_pressed.png]
+	style[one_btn16:focused;bgimg=testformspec_bg_9slice_focused.png;fgimg=testformspec_bg_focused.png]
+	image_button[2.5,9.6;2,1;;one_btn16;9-Slice Bg]
 
 
 	container[2.75,0]
@@ -213,11 +255,11 @@ local style_fs = [[
 
 	style[one_f3;textcolor=yellow]
 	textarea[0,7.025;2.5,0.8;one_f3;Label;]] ..
-		minetest.formspec_escape("Yellow Text\nLine two") .. [[ ]
+		core.formspec_escape("Yellow Text\nLine two") .. [[ ]
 
 	style[one_f4;border=false;textcolor=cyan]
 	textarea[0,8.324999999999999;2.5,0.8;one_f4;Label;]] ..
-		minetest.formspec_escape("Borderless Cyan Text\nLine two") .. [[ ]
+		core.formspec_escape("Borderless Cyan Text\nLine two") .. [[ ]
 
 	container_end[]
 ]]
@@ -257,7 +299,18 @@ local scroll_fs =
 	"scrollbaroptions[max=170]".. -- lowest seen pos is: 0.1*170+6=23 (factor*max+height)
 	"scrollbar[7.5,0;0.3,4;vertical;scrbar;0]"..
 	"scrollbar[8,0;0.3,4;vertical;scrbarhmmm;0]"..
-	"dropdown[0,6;2;hmdrpdwnnn;Outside,of,container;1]"
+	"dropdown[0,6;2;hmdrpdwnnn;Outside,of,container;1]"..
+	"scroll_container[0,8;10,4;scrbar420;vertical;0.1;2]"..
+		"button[0.5,0.5;10,1;;Container with padding=2]"..
+		"list[current_player;main;0,5;8,4;]"..
+	"scroll_container_end[]"..
+	"scrollbar[10.1,8;0.5,4;vertical;scrbar420;0]"..
+	-- Buttons for scale comparison
+	"button[11,8;1,1;;0]"..
+	"button[11,9;1,1;;1]"..
+	"button[11,10;1,1;;2]"..
+	"button[11,11;1,1;;3]"..
+	"button[11,12;1,1;;4]"
 
 --style_type[label;textcolor=green]
 --label[0,0;Green]
@@ -270,16 +323,248 @@ local scroll_fs =
 --style_type[label;border=;bgcolor=]
 --label[0.75,2;Reset]
 
+local autoscroll_fs =
+	"label[0.5,0.5;Auto-Scroll Test - Tab through buttons to test auto-scroll centering]" ..
+	"label[0.5,1;Vertical scroll container:]" ..
+	"scroll_container[0.5,1.5;5.5,5;autoscroll_v;vertical]" ..
+		"button[0,0;5,1;asv_btn1;Button 1]" ..
+		"button[0,1;5,1;asv_btn2;Button 2]" ..
+		"button[0,2;5,1;asv_btn3;Button 3]" ..
+		"button[0,3;5,1;asv_btn4;Button 4]" ..
+		"button[0,4;5,1;asv_btn5;Button 5]" ..
+		"button[0,5;5,1;asv_btn6;Button 6]" ..
+		"button[0,6;5,1;asv_btn7;Button 7]" ..
+		"button[0,7;5,1;asv_btn8;Button 8]" ..
+		"button[0,8;5,1;asv_btn9;Button 9]" ..
+		"button[0,9;5,1;asv_btn10;Button 10]" ..
+	"scroll_container_end[]" ..
+	"scrollbaroptions[max=50]" ..
+	"scrollbar[5.8,1.5;0.3,5;vertical;autoscroll_v;0]" ..
+	"label[7,1;Horizontal scroll container:]" ..
+	"scroll_container[7,1.5;4.5,2;autoscroll_h;horizontal]" ..
+		"button[0,0;3,1;ash_btn1;Btn1]" ..
+		"button[3,0;3,1;ash_btn2;Btn2]" ..
+		"button[6,0;3,1;ash_btn3;Btn3]" ..
+		"button[9,0;3,1;ash_btn4;Btn4]" ..
+		"button[12,0;3,1;ash_btn5;Btn5]" ..
+	"scroll_container_end[]" ..
+	"scrollbaroptions[max=105]" ..
+	"scrollbar[7,2.7;4.5,0.3;horizontal;autoscroll_h;0]"
+
+local tooltip_fs = [[
+	box[1,2;1,1;#ff000080]
+	tooltip[1,2;1,1;Normal tooltip in an area]
+
+	box[2.5,2;1,1;#ff000080]
+	tooltip[2.5,2;1,1;Normal tooltip in an area with explicit bgcolor and fontcolor;#53286c;#f5cf0f]
+
+	style[tt_btn;bgcolor=#ff0000]
+	button[4,2;1,1;tt_btn;Button]
+	tooltip[tt_btn;Normal tooltip on a button]
+
+	box[1,3.5;1,1;#ffff0080]
+	box[2.8,3.9;0.4,0.2;#ffffff80]
+	hypertip[1,3.5;1,1;3,4;20;hypertip_static;<big>Simple hypertip (<i>static</i>)</big>
+The top left corner of this hypertip must appear at the center of the tiny white rectangle.]
+
+	box[1,5;1,1;#ffff0080]
+	hypertip[1,5;1,1;;20;hypertip_dynamic;<big>Simple hypertip (<i>dynamic</i>)</big>
+This hypertip should appear at the cursor.]
+
+	style[st_btn;bgcolor=#ffff00]
+	button[2.5,5;1,1;st_btn;Button]
+	hypertip[st_btn;;20;hypertip_dynamic_btn;<big>Simple hypertip (<i>dynamic</i>)</big>
+This hypertip should appear at the cursor when hovering the button.]
+
+	box[1,6.5;1,1;#ffff0080]
+	hypertip[1,6.5;1,1;;20;hypertip_dynamic_complex;]]..core.formspec_escape([[<big>Complex hypertip (<i>dynamic</i>)</big>
+<img name=testformspec_node.png float=right width=64 height=64>
+<left>Left align</left>
+<center>Center align</center>
+<right>Right align</right>
+<b>Bold</b> <i>Italic</i> <u>Underline</u> <mono>Mono</mono>
+<style color=#ff0000>red</style> <style color=#00ff00>green</style> <style color=#0000ff>blue</style> <style color=#000000>black</style> <style color=#ffffff>white</style>
+
+Item:
+<item name=testformspec:node>]]).."]"..
+[[
+	box[2.5,6.5;1,1;#ffff0080]
+	hypertip[2.5,6.5;1,1;;25;hypertip_float;]]..core.formspec_escape([[<global margin=20>
+<big>Floating hypertip (<i>dynamic</i>)</big>
+<item name=testformspec:node float=left width=64 height=64> The item image must float to the left. The following text is just a filler. By the way, that image has float=left. Also it has a size of 64 times 64 pixels. Now let's continue with the next test.
+
+This item image must be inline: <item name=testformspec:node width=32 height=32>]]).."]"..
+[[
+
+	box[1,8;1,1;#ffff0080]
+	hypertip[1,8;1,1;;5;hypertip_bgimg;This hypertip has a width of 5em.]
+
+	box[2.5,8;1,1;#ffff0080]
+	hypertip[2.5,8;1,1;;7.5;hypertip_bgimg;This hypertip has a width of 7.5em.]
+
+	box[4,8;1,1;#ffff0080]
+	hypertip[4,8;1,1;;10;hypertip_bgimg;This hypertip has a width of 10em.]
+
+	box[5.5,8;1,1;#ffff0080]
+	hypertip[5.5,8;1,1;;20;hypertip_bgimg;This hypertip has a width of 20em.]
+
+	box[7,8;1,1;#ffff0080]
+	hypertip[7,8;1,1;;50;hypertip_bgimg;This hypertip has a width of 50em.]
+
+
+	box[1,9.5;1,1;#ffff0080]
+	hypertip[1,9.5;1,1;;8;hypertip_margin_1;<global margin=1>This hypertip has a margin of 1.]
+
+	box[2.5,9.5;1,1;#ffff0080]
+	hypertip[2.5,9.5;1,1;;8;hypertip_margin_2;<global margin=2>This hypertip has a margin of 2.]
+
+	box[4,9.5;1,1;#ffff0080]
+	hypertip[4,9.5;1,1;;8;hypertip_margin_5;<global margin=5>This hypertip has a margin of 5.]
+
+	box[5.5,9.5;1,1;#ffff0080]
+	hypertip[5.5,9.5;1,1;;8;hypertip_margin_10;<global margin=10>This hypertip has a margin of 10.]
+
+	box[7,9.5;1,1;#ffff0080]
+	hypertip[7,9.5;1,1;;8;hypertip_margin_20;<global margin=20>This hypertip has a margin of 20.]
+
+
+	box[1,11;1,1;#ffff0080]
+	style[hypertip_bgimg;bgimg=testformspec_tooltip_style_bg.png;bgimg_middle=8]
+	hypertip[1,11;1,1;;8;hypertip_bgimg;This hypertip is styled (bgimg)!]
+
+	box[2.5,11;1,1;#ffff0080]
+	style[hypertip_bgcolor;bgcolor=#444488]
+	hypertip[2.5,11;1,1;;8;hypertip_bgcolor;This hypertip is styled (bgcolor)!]
+
+	box[4,11;1,1;#ffff0080]
+	style[hypertip_bgimgcolor;bgimg=testformspec_tooltip_style_bg.png;bgimg_middle=8;bgcolor=#444488]
+	hypertip[4,11;1,1;;8;hypertip_bgimgcolor;This hypertip is styled (bgimg + bgcolor)!]
+
+	box[5.5,11;1,1;#ffff0080]
+	style[hypertip_noborder;border=false]
+	hypertip[5.5,11;1,1;;8;hypertip_noborder;This hypertip is styled (no border)!]
+
+	box[7,11;1,1;#ffff0080]
+	style[hypertip_combined;bgimg=testformspec_tooltip_style_bg.png;bgimg_middle=8;bgcolor=#00000000;border=false]
+	hypertip[7,11;1,1;;8;hypertip_combined;This hypertip is styled (bgimage, transparent bgcolor, no border)!]
+
+
+]]
+
+local multiline_str = ""
+for i = 1, 40 do
+	multiline_str = multiline_str .. words[math.random(#words)] .. "\n"
+end
+
+local text_alignment_fs = [[
+	style_type[label;font=bold;font_size=18]
+	label[0,0;Labels]
+
+	box[0,0.25;11,0.05;#e6e6e665]
+
+	container[0,0.5]
+	box[0,0;3.446,1;#222]
+	style_type[label;font=normal;font_size=*1]
+	label[0,0;3.446,1;Default label]
+
+	box[3.776,0;3.446,1;#222]
+	style_type[label;halign=center;valign=center]
+	label[3.776,0;3.446,1;Centered label]
+
+	box[7.552,0;3.446,1;#222]
+	style_type[label;halign=right;valign=bottom]
+	label[7.552,0;3.446,1;Bottom-right label]
+
+	box[0,1.33;3.446,1;#222]
+	style_type[label;halign=left;valign=bottom]
+	label[0,1.33;3.446,1;Bottom-left label]
+
+	box[3.776,1.33;3.446,1;#222]
+	style_type[label;halign=center;valign=top]
+	label[3.776,1.33;3.446,1;Top-center label]
+
+	box[7.552,1.33;3.446,1;#222]
+	style_type[label;halign=right;valign=center]
+	label[7.552,1.33;3.446,1;Center-right label]
+
+	box[0,2.66;3.446,1;#222]
+	style_type[label;halign=center;valign=center;font_size=20]
+	label[0,2.66;3.446,1;Size 20]
+
+	box[3.776,2.66;3.446,1;#222]
+	style_type[label;font_size=28]
+	label[3.776,2.66;3.446,1;Size 28]
+
+	box[7.552,2.66;3.446,1;#222]
+	style_type[label;font_size=36]
+	label[7.552,2.66;3.446,1;Size 36]
+	container_end[]
+
+	style_type[label;font=bold;font_size=18]
+	label[0,4.66;Textareas]
+
+	box[0,4.91;11,0.05;#e6e6e665]
+
+	container[0,5.33]
+	style_type[textarea;halign=left;valign=left]
+	textarea[0,0;3.667,2;textarea_1;Default textarea;]] .. multiline_str .. [[]
+
+	box[0,2;5.5,2;#222]
+	style_type[textarea;halign=left;valign=left]
+	textarea[0,2;3.667,2;;;]] .. multiline_str .. [[]
+
+	box[3.667,0;3.667,2;#222]
+	style_type[textarea;halign=center;valign=center]
+	textarea[3.667,0;3.667,2;;Centered textarea;]] .. multiline_str .. [[]
+
+	style_type[textarea;halign=center;valign=center]
+	textarea[3.667,2;3.667,2;textarea_2;;]] .. multiline_str .. [[]
+
+	box[7.333,2;3.667,2;#222]
+	style_type[textarea;halign=right;valign=center]
+	textarea[7.333,2;3.667,2;;;]] .. multiline_str .. [[]
+
+	style_type[textarea;halign=right;valign=center]
+	textarea[7.333,0;3.667,2;textarea_3;Right-aligned textarea;]] .. multiline_str .. [[]
+	container_end[]
+
+	style_type[label;font=bold;font_size=18]
+	label[0,9.83;Fields]
+
+	box[0,10.08;11,0.05;#e6e6e665]
+
+	container[0,10.5]
+	field[0,0;3.667,0.8;field_1;Default;test]
+
+	style_type[field;halign=center]
+	field[3.667,0;3.667,0.8;field_2;Centered;test]
+
+	style_type[field;halign=right]
+	field[7.333,0;3.667,0.8;field_3;Right-aligned;test]
+	container_end[]
+]]
+
+local window = {
+	sizex = 12,
+	sizey = 13,
+	positionx = 0.5,
+	positiony = 0.5,
+	anchorx = 0.5,
+	anchory = 0.5,
+	paddingx = 0.05,
+	paddingy = 0.05
+}
 
 local pages = {
 	-- Real Coordinates
 	[[
 		formspec_version[3]
 		size[12,13]
+		allow_close[false]
 		image_button[0,0;1,1;logo.png;rc_image_button_1x1;1x1]
-		image_button[1,0;2,2;logo.png;rc_image_button_2x2;2x2]
+		image_button_exit[1,0;2,2;logo.png;rc_image_button_2x2;2x2 exit]
 		button[0,2;1,1;rc_button_1x1;1x1]
-		button[1,2;2,2;rc_button_2x2;2x2]
+		button_exit[1,2;2,2;rc_button_2x2;2x2 exit]
 		item_image[0,4;1,1;air]
 		item_image[1,4;2,2;air]
 		item_image_button[0,6;1,1;testformspec:node;rc_item_image_button_1x1;1x1]
@@ -333,6 +618,10 @@ local pages = {
 		"label[11,0.5;Noclip]" ..
 		"container[11.5,1]" .. clip_fs:gsub("%%c", "true") .. "container_end[]",
 
+	-- Table
+		"size[18,13]real_coordinates[true]" ..
+		"container[0.5,0.5]" .. table_fs.. "container_end[]",
+
 	-- Hypertext
 		"size[12,13]real_coordinates[true]" ..
 		"container[0.5,0.5]" .. hypertext_fs .. "container_end[]",
@@ -341,17 +630,40 @@ local pages = {
 		"size[12,13]real_coordinates[true]" ..
 		"container[0.5,1.5]" .. tabheaders_fs .. "container_end[]",
 
-		-- Inv
+	-- Inv
 		"size[12,13]real_coordinates[true]" .. inv_style_fs,
+
+	-- Window
+		function()
+			return "formspec_version[3]" ..
+				string.format("size[%s,%s]position[%s,%s]anchor[%s,%s]padding[%s,%s]",
+					window.sizex, window.sizey, window.positionx, window.positiony,
+					window.anchorx, window.anchory, window.paddingx, window.paddingy) ..
+				string.format("field[0.5,0.5;2.5,0.5;sizex;X Size;%s]field[3.5,0.5;2.5,0.5;sizey;Y Size;%s]" ..
+					"field[0.5,1.5;2.5,0.5;positionx;X Position;%s]field[3.5,1.5;2.5,0.5;positiony;Y Position;%s]" ..
+					"field[0.5,2.5;2.5,0.5;anchorx;X Anchor;%s]field[3.5,2.5;2.5,0.5;anchory;Y Anchor;%s]" ..
+					"field[0.5,3.5;2.5,0.5;paddingx;X Padding;%s]field[3.5,3.5;2.5,0.5;paddingy;Y Padding;%s]" ..
+					"button[2,4.5;2.5,0.5;submit_window;Submit]",
+					window.sizex, window.sizey, window.positionx, window.positiony,
+					window.anchorx, window.anchory, window.paddingx, window.paddingy) ..
+				"field_close_on_enter[sizex;false]field_close_on_enter[sizey;false]" ..
+				"field_close_on_enter[positionx;false]field_close_on_enter[positiony;false]" ..
+				"field_close_on_enter[anchorx;false]field_close_on_enter[anchory;false]" ..
+				"field_close_on_enter[paddingx;false]field_close_on_enter[paddingy;false]"
+		end,
 
 	-- Animation
 		[[
-			formspec_version[3]
+			formspec_version[6]
 			size[12,13]
 			animated_image[0.5,0.5;1,1;;testformspec_animation.png;4;100]
 			animated_image[0.5,1.75;1,1;;testformspec_animation.jpg;4;100]
 			animated_image[1.75,0.5;1,1;;testformspec_animation.png;100;100]
 			animated_image[3,0.5;1,1;ani_img_1;testformspec_animation.png;4;1000]
+			image[0.5,3;1,1;testformspec_bg.png;1]
+			animated_image[0.5,4.25;1,1;;[combine:16x48:0,0=testformspec_bg.png:0,16=testformspec_bg_hovered.png:0,32=testformspec_bg_pressed.png;3;250;1;1]
+			image[0.5,5.5;2,1;testformspec_9slice.png;16,0,-16,-16]
+			animated_image[2.75,5.5;1.5,0.5;;[combine:300x140:0,0=testformspec_9slice.png:0,70=(testformspec_9slice.png^[transformFX);2;500;1;16,0,-16,-16]
 			button[4.25,0.5;1,1;ani_btn_1;Current
 Number]
 			animated_image[3,1.75;1,1;ani_img_2;testformspec_animation.png;4;1000;2]
@@ -383,8 +695,12 @@ mouse control = true]
 		]],
 
 	-- Scroll containers
-		"formspec_version[3]size[12,13]" ..
+		"formspec_version[7]size[12,13]" ..
 		scroll_fs,
+
+	-- Autoscroll
+		"formspec_version[7]size[12,13]" ..
+		autoscroll_fs,
 
 	-- Sound
 		[[
@@ -401,46 +717,135 @@ mouse control = true]
 			checkbox[0.5,5.5.5;snd_chk;Sound;]
 			tabheader[0.5,7;8,0.65;snd_tab;Soundtab1,Soundtab2,Soundtab3;1;false;false]
 		]],
+
+	-- Background
+		[[
+			formspec_version[3]
+			size[12,13]
+			box[0,0;12,13;#f0f1]
+			background[0,0;0,0;testformspec_bg.png;true]
+			box[3.9,2.9;6.2,4.2;#d00f]
+			scroll_container[4,3;6,4;scrbar;vertical]
+				background9[1,0.5;0,0;testformspec_bg_9slice.png;true;4,6]
+				label[0,0.2;Backgrounds are not be applied to scroll containers,]
+				label[0,0.5;but to the whole form.]
+			scroll_container_end[]
+			scrollbar[3.5,3;0.3,4;vertical;scrbar;0]
+			container[2,11]
+				box[-0.1,0.5;3.2,1;#fff5]
+				background[0,0;2,3;testformspec_bg.png;false]
+				background9[1,0;2,3;testformspec_bg_9slice.png;false;4,6]
+			container_end[]
+		]],
+
+	-- Unsized
+		[[
+			formspec_version[3]
+			background9[0,0;0,0;testformspec_bg_9slice.png;true;4,6]
+			background[1,1;0,0;testformspec_bg.png;true]
+		]],
+
+	-- Tooltip
+		[[
+			formspec_version[9]
+			size[12,13]
+			label[1,0.5;10,1;Tooltip test without listcolors element. Hover a square or button for a tooltip.]
+		]]..
+		tooltip_fs,
+
+	-- Tooltip + listcolors
+		[[
+			formspec_version[9]
+			size[12,13]
+			listcolors[#808080;#a0a0a0;#000000;#b8191e;#17ff0f]
+			label[1,0.5;10,1;Tooltip test with listcolors element specifying default tooltip colors. Hover a square or button for a tooltip.]
+		]]..
+		tooltip_fs,
+
+	--listimages
+		[[
+			formspec_version[11]
+			size[12,13]
+			list[current_player;main;1,1;8,1;0]
+
+			listimages[testformspec_node.png;testformspec_hovered.png]
+			list[current_player;main;1,3;8,2;8]
+
+			listimages[;testformspec_hovered.png^\[brighten]
+			list[current_player;main;1,6;8,1;24]
+		]],
+
+	-- Text alignment
+		"size[12,13]real_coordinates[true]" ..
+		"container[0.5,0.5]" .. text_alignment_fs .. "container_end[]",
 }
 
-local function show_test_formspec(pname, page_id)
-	page_id = page_id or 2
+local page_id = 2
+local function show_test_formspec(pname)
+	local page = pages[page_id]
+	if type(page) == "function" then
+		page = page()
+	end
 
-	local fs = pages[page_id] .. "tabheader[0,0;8,0.65;maintabs;Real Coord,Styles,Noclip,Hypertext,Tabs,Invs,Anim,Model,ScrollC,Sound;" .. page_id .. ";false;false]"
+	local fs = page .. "tabheader[0,0;11,0.65;maintabs;Real Coord,Styles,Noclip,Table,Hypertext,Tabs,Invs,Window,Anim,Model,ScrollC,Autoscroll,Sound,Background,Unsized,Tooltip,Tooltip+Listcolors,Listimages,Text Alignment;" .. page_id .. ";false;false]"
 
-	minetest.show_formspec(pname, "testformspec:formspec", fs)
+	core.show_formspec(pname, "testformspec:formspec", fs)
 end
 
-minetest.register_on_player_receive_fields(function(player, formname, fields)
+core.register_on_player_receive_fields(function(player, formname, fields)
 	if formname ~= "testformspec:formspec" then
 		return false
 	end
 
-
 	if fields.maintabs then
-		show_test_formspec(player:get_player_name(), tonumber(fields.maintabs))
+		page_id = tonumber(fields.maintabs)
+		show_test_formspec(player:get_player_name())
 		return true
 	end
 
 	if fields.ani_img_1 and fields.ani_btn_1 then
-		minetest.chat_send_player(player:get_player_name(), "ani_img_1 = " .. tostring(fields.ani_img_1))
+		core.chat_send_player(player:get_player_name(), "ani_img_1 = " .. tostring(fields.ani_img_1))
 		return true
 	elseif fields.ani_img_2 and fields.ani_btn_2 then
-		minetest.chat_send_player(player:get_player_name(), "ani_img_2 = " .. tostring(fields.ani_img_2))
+		core.chat_send_player(player:get_player_name(), "ani_img_2 = " .. tostring(fields.ani_img_2))
 		return true
 	end
 
 	if fields.hypertext then
-		minetest.chat_send_player(player:get_player_name(), "Hypertext action received: " .. tostring(fields.hypertext))
+		core.chat_send_player(player:get_player_name(), "Hypertext action received: " .. tostring(fields.hypertext))
 		return true
+	end
+
+	for name, value in pairs(fields) do
+		if window[name] then
+			print(name, window[name])
+			local num_val = tonumber(value) or 0
+
+			if name == "sizex" and num_val < 4 then
+				num_val = 6.5
+			elseif name == "sizey" and num_val < 5 then
+				num_val = 5.5
+			end
+
+			window[name] = num_val
+			print(name, window[name])
+		end
+	end
+
+	if fields.submit_window then
+		show_test_formspec(player:get_player_name())
+	end
+
+	if fields.try_quit then
+		core.chat_send_player(player:get_player_name(), "Quit attempt received")
 	end
 end)
 
-minetest.register_chatcommand("test_formspec", {
+core.register_chatcommand("test_formspec", {
 	params = "",
 	description = "Open the test formspec",
 	func = function(name)
-		if not minetest.get_player_by_name(name) then
+		if not core.get_player_by_name(name) then
 			return false, "You need to be online!"
 		end
 

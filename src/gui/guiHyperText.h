@@ -1,39 +1,26 @@
-/*
-Minetest
-Copyright (C) 2019 EvicenceBKidscode / Pierre-Yves Rollo <dev@pyrollo.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2019 EvicenceBKidscode / Pierre-Yves Rollo <dev@pyrollo.com>
 
 #pragma once
 
-#include "config.h" // for USE_FREETYPE
-
-using namespace irr;
+#include <vector>
+#include <list>
+#include <unordered_map>
+#include <string>
+#include <IGUIElement.h>
+#include <IGUIEnvironment.h>
+#include "irr_v3d.h"
+#include "StyleSpec.h"
 
 class ISimpleTextureSource;
 class Client;
-
-#if USE_FREETYPE
-#include "irrlicht_changes/CGUITTFont.h"
-#endif
+class GUIScrollBar;
 
 class ParsedText
 {
 public:
-	ParsedText(const wchar_t *text);
+	ParsedText(const wchar_t *text, video::SColor default_color);
 	~ParsedText();
 
 	enum ElementType
@@ -98,8 +85,8 @@ public:
 
 		gui::IGUIFont *font;
 
-		irr::video::SColor color;
-		irr::video::SColor hovercolor;
+		video::SColor color;
+		video::SColor hovercolor;
 		bool underline;
 
 		s32 baseline = 0;
@@ -129,7 +116,10 @@ public:
 	s32 margin = 3;
 	ValignType valign = VALIGN_TOP;
 	BackgroundType background_type = BACKGROUND_NONE;
-	irr::video::SColor background_color;
+	video::SColor background_color;
+	video::ITexture *background_image = nullptr;
+	core::rect<s32> background_middle;
+	bool border = false;
 
 	Tag m_root_tag;
 
@@ -170,12 +160,16 @@ class TextDrawer
 {
 public:
 	TextDrawer(const wchar_t *text, Client *client, gui::IGUIEnvironment *environment,
-			ISimpleTextureSource *tsrc);
+			ISimpleTextureSource *tsrc,
+			video::SColor default_background_color,
+			video::SColor default_color);
 
 	void place(const core::rect<s32> &dest_rect);
 	inline s32 getHeight() { return m_height; };
 	void draw(const core::rect<s32> &clip_rect,
 			const core::position2d<s32> &dest_offset);
+	void drawBackgroundImage(video::IVideoDriver *driver, const core::rect<s32> &clip_rect);
+	void applyStyleSpecToText(const StyleSpec &style);
 	ParsedText::Element *getElementAt(core::position2d<s32> pos);
 	ParsedText::Tag *m_hovertag;
 
@@ -187,11 +181,13 @@ protected:
 	};
 
 	ParsedText m_text;
-	Client *m_client;
-	gui::IGUIEnvironment *m_environment;
-	s32 m_height;
+	Client *m_client; ///< null in the mainmenu
+	ISimpleTextureSource *m_tsrc;
+	gui::IGUIEnvironment *m_guienv;
+	s32 m_height = 0;
 	s32 m_voffset;
 	std::vector<RectWithMargin> m_floating;
+	video::SColor m_default_background_color;
 };
 
 class GUIHyperText : public gui::IGUIElement
@@ -201,7 +197,10 @@ public:
 	GUIHyperText(const wchar_t *text, gui::IGUIEnvironment *environment,
 			gui::IGUIElement *parent, s32 id,
 			const core::rect<s32> &rectangle, Client *client,
-			ISimpleTextureSource *tsrc);
+			ISimpleTextureSource *tsrc,
+			video::SColor default_background_color,
+			video::SColor default_color,
+			bool is_hypertip = false);
 
 	//! destructor
 	virtual ~GUIHyperText();
@@ -209,13 +208,16 @@ public:
 	//! draws the element and its children
 	virtual void draw();
 
-	core::dimension2du getTextDimension();
+	//! Returns the height of the text in pixels when it is drawn.
+	s32 getTextHeight() { return m_drawer.getHeight(); }
 
 	bool OnEvent(const SEvent &event);
 
+	void setStyles(const std::array<StyleSpec, StyleSpec::NUM_STATES> &styles);
+
 protected:
 	// GUI members
-	Client *m_client;
+	ISimpleTextureSource *m_tsrc;
 	GUIScrollBar *m_vscrollbar;
 	TextDrawer m_drawer;
 
@@ -226,4 +228,11 @@ protected:
 
 	ParsedText::Element *getElementAt(s32 X, s32 Y);
 	void checkHover(s32 X, s32 Y);
+
+	// Counter variable to be increased every iteration of draw(),
+	// if it reached a certain number, drawing is allowed.
+	int m_draw_state = 0;
+
+	video::SColor m_default_background_color;
+	video::SColor m_default_color;
 };

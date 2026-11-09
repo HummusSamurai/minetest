@@ -1,28 +1,15 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "scripting_server.h"
 #include "server.h"
 #include "log.h"
 #include "settings.h"
+#include "filesys.h"
 #include "cpp_api/s_internal.h"
 #include "lua_api/l_areastore.h"
+#include "lua_api/l_async.h"
 #include "lua_api/l_auth.h"
 #include "lua_api/l_base.h"
 #include "lua_api/l_craft.h"
@@ -45,13 +32,15 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "lua_api/l_settings.h"
 #include "lua_api/l_http.h"
 #include "lua_api/l_storage.h"
+#include "lua_api/l_ipc.h"
 
 extern "C" {
-#include "lualib.h"
+#include <lualib.h>
 }
 
 ServerScripting::ServerScripting(Server* server):
-		ScriptApiBase(ScriptingType::Server)
+		ScriptApiBase(ScriptingType::Server),
+		ScriptApiAsync()
 {
 	setGameDef(server);
 
@@ -60,12 +49,21 @@ ServerScripting::ServerScripting(Server* server):
 
 	SCRIPTAPI_PRECHECKHEADER
 
-	if (g_settings->getBool("secure.enable_security")) {
+	if (!g_disable_mod_security) {
 		initializeSecurity();
+
+		std::string old_name("secure.enable_security");
+		if (g_settings->exists(old_name) && !g_settings->getBool(old_name)) {
+			warningstream << "The setting '" << old_name << "' was removed "
+				"and is now ignored. Use the --insecure-no-sandbox CLI flag if you "
+				"really want to continue disabling the Lua sandbox." << std::endl;
+		}
 	} else {
-		warningstream << "\\!/ Mod security should never be disabled, as it allows any mod to "
-				<< "access the host machine."
-				<< "Mods should use minetest.request_insecure_environment() instead \\!/" << std::endl;
+		errorstream << u8"\u26A0\uFE0E" << " The Lua sandbox is disabled completely. "
+			"All mods can run arbitrary programs and have full filesystem access. "
+			"This is a SECURITY RISK! " << u8"\u26A0\uFE0E"
+			<< "\nInstead consider core.request_insecure_environment() to allow "
+			"selectively bypassing the sandbox." << std::endl;
 	}
 
 	lua_getglobal(L, "core");
@@ -73,6 +71,9 @@ ServerScripting::ServerScripting(Server* server):
 
 	lua_newtable(L);
 	lua_setfield(L, -2, "object_refs");
+
+	lua_newtable(L);
+	lua_setfield(L, -2, "objects_by_guid");
 
 	lua_newtable(L);
 	lua_setfield(L, -2, "luaentities");
@@ -88,6 +89,66 @@ ServerScripting::ServerScripting(Server* server):
 	infostream << "SCRIPTAPI: Initialized game modules" << std::endl;
 }
 
+void ServerScripting::loadBuiltin()
+{
+	loadMod(getBuiltinLuaPath() + DIR_DELIM "init.lua", BUILTIN_MOD_NAME);
+	checkSetByBuiltin();
+}
+
+void ServerScripting::saveGlobals()
+{
+	SCRIPTAPI_PRECHECKHEADER
+
+	lua_getglobal(L, "core");
+	luaL_checktype(L, -1, LUA_TTABLE);
+	lua_getfield(L, -1, "get_globals_to_transfer");
+	lua_call(L, 0, 1);
+	auto *data = script_pack(L, -1);
+	assert(!data->contains_userdata);
+	getServer()->m_lua_globals_data.reset(data);
+	// unset the function
+	lua_pushnil(L);
+	lua_setfield(L, -3, "get_globals_to_transfer");
+	lua_pop(L, 2); // pop 'core', return value
+}
+
+void ServerScripting::initAsync()
+{
+	infostream << "SCRIPTAPI: Initializing async engine" << std::endl;
+	asyncEngine.registerStateInitializer(InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiUtil::InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiCraft::InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiItem::InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiServer::InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiIPC::Initialize);
+	// not added: ModApiMapgen is a minefield for thread safety
+	// not added: ModApiHttp async api can't really work together with our jobs
+	// not added: ModApiStorage is probably not thread safe(?)
+
+	asyncEngine.initialize(0, "async_game", !g_disable_mod_security);
+}
+
+void ServerScripting::reportAsyncError(const std::string &msg)
+{
+	getServer()->setAsyncFatalError(msg);
+}
+
+bool ServerScripting::onAsyncEnvSetup(ScriptApiBase *inner)
+{
+	auto *server = getServer();
+	assert(server);
+	const auto &list = server->m_async_init_files;
+	try {
+		for (auto &it : list)
+			inner->loadMod(it.second, it.first);
+	} catch (const ModError &e) {
+		errorstream << "Failed to load mod script inside async environment" << std::endl;
+		server->setAsyncFatalError(e.what());
+		return false;
+	}
+	return true;
+}
+
 void ServerScripting::InitializeModApi(lua_State *L, int top)
 {
 	// Register reference classes (userdata)
@@ -95,8 +156,8 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ItemStackMetaRef::Register(L);
 	LuaAreaStore::Register(L);
 	LuaItemStack::Register(L);
-	LuaPerlinNoise::Register(L);
-	LuaPerlinNoiseMap::Register(L);
+	LuaValueNoise::Register(L);
+	LuaValueNoiseMap::Register(L);
 	LuaPseudoRandom::Register(L);
 	LuaPcgRandom::Register(L);
 	LuaRaycast::Register(L);
@@ -111,11 +172,12 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ModChannelRef::Register(L);
 
 	// Initialize mod api modules
+	ModApiAsync::Initialize(L, top);
 	ModApiAuth::Initialize(L, top);
 	ModApiCraft::Initialize(L, top);
-	ModApiEnvMod::Initialize(L, top);
+	ModApiEnv::Initialize(L, top);
 	ModApiInventory::Initialize(L, top);
-	ModApiItemMod::Initialize(L, top);
+	ModApiItem::Initialize(L, top);
 	ModApiMapgen::Initialize(L, top);
 	ModApiParticles::Initialize(L, top);
 	ModApiRollback::Initialize(L, top);
@@ -124,4 +186,26 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ModApiHttp::Initialize(L, top);
 	ModApiStorage::Initialize(L, top);
 	ModApiChannels::Initialize(L, top);
+	ModApiIPC::Initialize(L, top);
+}
+
+void ServerScripting::InitializeAsync(lua_State *L, int top)
+{
+	// classes
+	ItemStackMetaRef::Register(L);
+	LuaAreaStore::Register(L);
+	LuaItemStack::Register(L);
+	LuaValueNoise::Register(L);
+	LuaValueNoiseMap::Register(L);
+	LuaPseudoRandom::Register(L);
+	LuaPcgRandom::Register(L);
+	LuaSecureRandom::Register(L);
+	LuaVoxelManip::Register(L);
+	LuaSettings::Register(L);
+
+	// globals data
+	auto *data = ModApiBase::getServer(L)->m_lua_globals_data.get();
+	assert(data);
+	script_unpack(L, data);
+	lua_setfield(L, top, "transferred_globals");
 }

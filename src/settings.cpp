@@ -1,67 +1,113 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "settings.h"
 #include "irrlichttypes_bloated.h"
 #include "exceptions.h"
 #include "threading/mutex_auto_lock.h"
+#include "util/numeric.h" // rangelim
+#include "util/string.h"
 #include "util/strfnd.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include "debug.h"
 #include "log.h"
-#include "util/serialize.h"
 #include "filesys.h"
 #include "noise.h"
 #include <cctype>
+#include <set>
 #include <algorithm>
 
-Settings *g_settings = nullptr; // Populated in main()
-std::string g_settings_path;
+// multi-line settings begin and end with this string (on its own line)
+#define MULTILINE_MARKER "\"\"\""
 
-Settings *Settings::s_layers[SL_TOTAL_COUNT] = {0}; // Zeroed by compiler
+Settings *g_settings = nullptr;
+static SettingsHierarchy g_hierarchy;
+std::string g_settings_path;
+bool g_first_run = false;
+bool g_disable_mod_security = false;
+
 std::unordered_map<std::string, const FlagDesc *> Settings::s_flags;
 
+/* Settings hierarchy implementation */
 
-Settings *Settings::createLayer(SettingsLayer sl, const std::string &end_tag)
+SettingsHierarchy::SettingsHierarchy(Settings *fallback)
 {
-	if ((int)sl < 0 || sl >= SL_TOTAL_COUNT)
+	layers.push_back(fallback);
+}
+
+
+Settings *SettingsHierarchy::getLayer(int layer) const
+{
+	if (layer < 0 || layer >= (int)layers.size())
 		throw BaseException("Invalid settings layer");
+	return layers[layer];
+}
 
-	Settings *&pos = s_layers[(size_t)sl];
+
+Settings *SettingsHierarchy::getParent(int layer) const
+{
+	assert(layer >= 0 && layer < (int)layers.size());
+	// iterate towards the origin (0) to find the next fallback layer
+	for (int i = layer - 1; i >= 0; --i) {
+		if (layers[i])
+			return layers[i];
+	}
+
+	return nullptr;
+}
+
+
+void SettingsHierarchy::onLayerCreated(int layer, Settings *obj)
+{
+	if (layer < 0)
+		throw BaseException("Invalid settings layer");
+	if ((int)layers.size() < layer + 1)
+		layers.resize(layer + 1);
+
+	Settings *&pos = layers[layer];
 	if (pos)
-		throw BaseException("Setting layer " + std::to_string(sl) + " already exists");
+		throw BaseException("Setting layer " + itos(layer) + " already exists");
 
-	pos = new Settings(end_tag);
-	pos->m_settingslayer = sl;
+	pos = obj;
+	// This feels bad
+	if (this == &g_hierarchy && layer == (int)SL_GLOBAL)
+		g_settings = obj;
+}
 
-	if (sl == SL_GLOBAL)
-		g_settings = pos;
-	return pos;
+
+void SettingsHierarchy::onLayerRemoved(int layer)
+{
+	assert(layer >= 0 && layer < (int)layers.size());
+	layers[layer] = nullptr;
+	if (this == &g_hierarchy && layer == (int)SL_GLOBAL)
+		g_settings = nullptr;
+}
+
+/* Settings implementation */
+
+Settings *Settings::createLayer(SettingsLayer sl, std::string_view end_tag)
+{
+	return new Settings(end_tag, &g_hierarchy, (int)sl);
 }
 
 
 Settings *Settings::getLayer(SettingsLayer sl)
 {
-	sanity_check((int)sl >= 0 && sl < SL_TOTAL_COUNT);
-	return s_layers[(size_t)sl];
+	return g_hierarchy.getLayer(sl);
+}
+
+
+Settings::Settings(std::string_view end_tag, SettingsHierarchy *h,
+		int settings_layer) :
+	m_end_tag(end_tag),
+	m_hierarchy(h),
+	m_settingslayer(settings_layer)
+{
+	if (m_hierarchy)
+		m_hierarchy->onLayerCreated(m_settingslayer, this);
 }
 
 
@@ -69,25 +115,21 @@ Settings::~Settings()
 {
 	MutexAutoLock lock(m_mutex);
 
-	if (m_settingslayer < SL_TOTAL_COUNT)
-		s_layers[(size_t)m_settingslayer] = nullptr;
-
-	// Compatibility
-	if (m_settingslayer == SL_GLOBAL)
-		g_settings = nullptr;
+	if (m_hierarchy)
+		m_hierarchy->onLayerRemoved(m_settingslayer);
 
 	clearNoLock();
 }
 
 
-Settings & Settings::operator = (const Settings &other)
+Settings & Settings::operator=(const Settings &other)
 {
 	if (&other == this)
 		return *this;
 
 	// TODO: Avoid copying Settings objects. Make this private.
-	FATAL_ERROR_IF(m_settingslayer != SL_TOTAL_COUNT && other.m_settingslayer != SL_TOTAL_COUNT,
-		("Tried to copy unique Setting layer " + std::to_string(m_settingslayer)).c_str());
+	FATAL_ERROR_IF(m_hierarchy || other.m_hierarchy,
+		"Cannot copy or overwrite Settings object that belongs to a hierarchy");
 
 	MutexAutoLock lock(m_mutex);
 	MutexAutoLock lock2(other.m_mutex);
@@ -100,7 +142,7 @@ Settings & Settings::operator = (const Settings &other)
 }
 
 
-bool Settings::checkNameValid(const std::string &name)
+bool Settings::checkNameValid(std::string_view name)
 {
 	bool valid = name.find_first_of("=\"{}#") == std::string::npos;
 	if (valid)
@@ -115,11 +157,11 @@ bool Settings::checkNameValid(const std::string &name)
 }
 
 
-bool Settings::checkValueValid(const std::string &value)
+bool Settings::checkValueValid(std::string_view value)
 {
-	if (value.substr(0, 3) == "\"\"\"" ||
-		value.find("\n\"\"\"") != std::string::npos) {
-		errorstream << "Invalid character sequence '\"\"\"' found in"
+	if (str_starts_with(value, MULTILINE_MARKER) ||
+		value.find("\n" MULTILINE_MARKER) != std::string::npos) {
+		errorstream << "Invalid character sequence '" MULTILINE_MARKER "' found in"
 			" setting value!" << std::endl;
 		return false;
 	}
@@ -129,25 +171,25 @@ bool Settings::checkValueValid(const std::string &value)
 std::string Settings::getMultiline(std::istream &is, size_t *num_lines)
 {
 	size_t lines = 1;
-	std::string value;
-	std::string line;
+	std::string value, line;
 
 	while (is.good()) {
 		lines++;
 		std::getline(is, line);
-		if (line == "\"\"\"")
-			break;
+		if (line == MULTILINE_MARKER) {
+			if (!value.empty())
+				value.pop_back(); // remove trailing \n
+			if (num_lines)
+				*num_lines = lines;
+			return value;
+		}
 		value += line;
 		value.push_back('\n');
 	}
 
-	size_t len = value.size();
-	if (len)
-		value.erase(len - 1);
-
+	// Stream ended before marker
 	if (num_lines)
-		*num_lines = lines;
-
+		*num_lines = 0;
 	return value;
 }
 
@@ -158,15 +200,17 @@ bool Settings::readConfigFile(const char *filename)
 	if (!is.good())
 		return false;
 
-	return parseConfigLines(is);
+	return parseConfigLines(is, filename);
 }
 
 
-bool Settings::parseConfigLines(std::istream &is)
+bool Settings::parseConfigLines(std::istream &is, std::string_view location)
 {
 	MutexAutoLock lock(m_mutex);
 
 	std::string line, name, value;
+
+	auto &log_to = infostream;
 
 	while (is.good()) {
 		std::getline(is, line);
@@ -174,31 +218,55 @@ bool Settings::parseConfigLines(std::istream &is)
 
 		switch (event) {
 		case SPE_NONE:
-		case SPE_INVALID:
 		case SPE_COMMENT:
 			break;
+		case SPE_INVALID:
+			log_to << "Ignoring invalid settings line: \"" << line << "\"";
+			if (!location.empty())
+				log_to << " in " << location;
+			log_to << std::endl;
+			break;
 		case SPE_KVPAIR:
-			m_settings[name] = SettingsEntry(value);
+			m_settings[name] = SettingsEntry(std::move(value));
 			break;
 		case SPE_END:
 			return true;
 		case SPE_GROUP: {
 			Settings *group = new Settings("}");
-			if (!group->parseConfigLines(is)) {
+			if (!group->parseConfigLines(is, location)) {
+				log_to << "Failed to parse settings group \"" << name << "\"";
+				if (!location.empty())
+					log_to << " in " << location;
+				log_to << std::endl;
 				delete group;
 				return false;
 			}
 			m_settings[name] = SettingsEntry(group);
 			break;
 		}
-		case SPE_MULTILINE:
-			m_settings[name] = SettingsEntry(getMultiline(is));
+		case SPE_MULTILINE: {
+			size_t lines = 0;
+			m_settings[name] = SettingsEntry(getMultiline(is, &lines));
+			if (!lines) {
+				log_to << "Unterminated multi-line setting \"" << name << "\"";
+				if (!location.empty())
+					log_to << " in " << location;
+				log_to << std::endl;
+				return false;
+			}
 			break;
+		}
 		}
 	}
 
-	// false (failure) if end tag not found
-	return m_end_tag.empty();
+	// failure if end tag not found
+	if (m_end_tag.empty())
+		return true;
+	log_to << "No end tag found for settings";
+	if (!location.empty())
+		log_to << " in " << location;
+	log_to << std::endl;
+	return false;
 }
 
 
@@ -277,7 +345,7 @@ bool Settings::updateConfigObject(std::istream &is, std::ostream &os, u32 tab_de
 			} else {
 				os << line << "\n";
 				if (event == SPE_MULTILINE)
-					os << value << "\n\"\"\"\n";
+					os << value << "\n" MULTILINE_MARKER "\n";
 			}
 			present_entries.insert(name);
 			break;
@@ -341,28 +409,25 @@ bool Settings::updateConfigFile(const char *filename)
 	if (!was_modified)
 		return true;
 
-	if (!fs::safeWriteToFile(filename, os.str())) {
-		errorstream << "Error writing configuration file: \""
-			<< filename << "\"" << std::endl;
+	if (!fs::safeWriteToFile(filename, os.str()))
 		return false;
-	}
 
 	return true;
 }
 
 
 bool Settings::parseCommandLine(int argc, char *argv[],
-		std::map<std::string, ValueSpec> &allowed_options)
+		const std::map<std::string, ValueSpec> &allowed_options)
 {
 	int nonopt_index = 0;
 	for (int i = 1; i < argc; i++) {
-		std::string arg_name = argv[i];
+		std::string_view arg_name(argv[i]);
 		if (arg_name.substr(0, 2) != "--") {
 			// If option doesn't start with -, read it in as nonoptX
-			if (arg_name[0] != '-'){
+			if (arg_name[0] != '-') {
 				std::string name = "nonopt";
 				name += itos(nonopt_index);
-				set(name, arg_name);
+				set(name, std::string(arg_name));
 				nonopt_index++;
 				continue;
 			}
@@ -371,10 +436,9 @@ bool Settings::parseCommandLine(int argc, char *argv[],
 			return false;
 		}
 
-		std::string name = arg_name.substr(2);
+		std::string name(arg_name.substr(2));
 
-		std::map<std::string, ValueSpec>::iterator n;
-		n = allowed_options.find(name);
+		auto n = allowed_options.find(name);
 		if (n == allowed_options.end()) {
 			errorstream << "Unknown command-line parameter \""
 					<< arg_name << "\"" << std::endl;
@@ -410,18 +474,7 @@ bool Settings::parseCommandLine(int argc, char *argv[],
 
 Settings *Settings::getParent() const
 {
-	// If the Settings object is within the hierarchy structure,
-	// iterate towards the origin (0) to find the next fallback layer
-	if (m_settingslayer >= SL_TOTAL_COUNT)
-		return nullptr;
-
-	for (int i = (int)m_settingslayer - 1; i >= 0; --i) {
-		if (s_layers[i])
-			return s_layers[i];
-	}
-
-	// No parent
-	return nullptr;
+	return m_hierarchy ? m_hierarchy->getParent(m_settingslayer) : nullptr;
 }
 
 
@@ -495,13 +548,17 @@ float Settings::getFloat(const std::string &name) const
 }
 
 
+float Settings::getFloat(const std::string &name, float min, float max) const
+{
+	float val = stof(get(name));
+	return rangelim(val, min, max);
+}
+
+
 u64 Settings::getU64(const std::string &name) const
 {
-	u64 value = 0;
 	std::string s = get(name);
-	std::istringstream ss(s);
-	ss >> value;
-	return value;
+	return from_string<u64>(s);
 }
 
 
@@ -516,15 +573,9 @@ v2f Settings::getV2F(const std::string &name) const
 }
 
 
-v3f Settings::getV3F(const std::string &name) const
+std::optional<v3f> Settings::getV3F(const std::string &name) const
 {
-	v3f value;
-	Strfnd f(get(name));
-	f.next("(");
-	value.X = stof(f.next(","));
-	value.Y = stof(f.next(","));
-	value.Z = stof(f.next(")"));
-	return value;
+	return str_to_v3f(get(name));
 }
 
 
@@ -607,7 +658,11 @@ bool Settings::getNoiseParamsFromGroup(const std::string &name,
 
 	group->getFloatNoEx("offset",      np.offset);
 	group->getFloatNoEx("scale",       np.scale);
-	group->getV3FNoEx("spread",        np.spread);
+
+	std::optional<v3f> spread;
+	if (group->getV3FNoEx("spread", spread) && spread.has_value())
+		np.spread = *spread;
+
 	group->getS32NoEx("seed",          np.seed);
 	group->getU16NoEx("octaves",       np.octaves);
 	group->getFloatNoEx("persistence", np.persist);
@@ -623,13 +678,19 @@ bool Settings::getNoiseParamsFromGroup(const std::string &name,
 
 bool Settings::exists(const std::string &name) const
 {
-	MutexAutoLock lock(m_mutex);
-
-	if (m_settings.find(name) != m_settings.end())
+	if (existsLocal(name))
 		return true;
 	if (auto parent = getParent())
 		return parent->exists(name);
 	return false;
+}
+
+
+bool Settings::existsLocal(const std::string &name) const
+{
+	MutexAutoLock lock(m_mutex);
+
+	return m_settings.find(name) != m_settings.end();
 }
 
 
@@ -715,6 +776,15 @@ bool Settings::getS16NoEx(const std::string &name, s16 &val) const
 	}
 }
 
+bool Settings::getU32NoEx(const std::string &name, u32 &val) const
+{
+	try {
+		val = getU32(name);
+		return true;
+	} catch (SettingNotFoundException &e) {
+		return false;
+	}
+}
 
 bool Settings::getS32NoEx(const std::string &name, s32 &val) const
 {
@@ -749,7 +819,7 @@ bool Settings::getV2FNoEx(const std::string &name, v2f &val) const
 }
 
 
-bool Settings::getV3FNoEx(const std::string &name, v3f &val) const
+bool Settings::getV3FNoEx(const std::string &name, std::optional<v3f> &val) const
 {
 	try {
 		val = getV3F(name);
@@ -823,6 +893,8 @@ bool Settings::set(const std::string &name, const std::string &value)
 // TODO: Remove this function
 bool Settings::setDefault(const std::string &name, const std::string &value)
 {
+	FATAL_ERROR_IF(m_hierarchy != &g_hierarchy, "setDefault is only valid on "
+		"global settings");
 	return getLayer(SL_DEFAULTS)->set(name, value);
 }
 
@@ -943,7 +1015,7 @@ bool Settings::remove(const std::string &name)
 SettingsParseEvent Settings::parseConfigObject(const std::string &line,
 	std::string &name, std::string &value)
 {
-	std::string trimmed_line = trim(line);
+	auto trimmed_line = trim(line);
 
 	if (trimmed_line.empty())
 		return SPE_NONE;
@@ -961,7 +1033,7 @@ SettingsParseEvent Settings::parseConfigObject(const std::string &line,
 
 	if (value == "{")
 		return SPE_GROUP;
-	if (value == "\"\"\"")
+	if (value == MULTILINE_MARKER)
 		return SPE_MULTILINE;
 
 	return SPE_KVPAIR;
@@ -997,21 +1069,22 @@ void Settings::registerChangedCallback(const std::string &name,
 	m_callbacks[name].emplace_back(cbf, userdata);
 }
 
-void Settings::deregisterChangedCallback(const std::string &name,
-	SettingsChangedCallback cbf, void *userdata)
+size_t Settings::deregisterAllChangedCallbacks(const void *userdata)
 {
 	MutexAutoLock lock(m_callback_mutex);
-	SettingsCallbackMap::iterator it_cbks = m_callbacks.find(name);
 
-	if (it_cbks != m_callbacks.end()) {
-		SettingsCallbackList &cbks = it_cbks->second;
-
-		SettingsCallbackList::iterator position =
-			std::find(cbks.begin(), cbks.end(), std::make_pair(cbf, userdata));
-
-		if (position != cbks.end())
-			cbks.erase(position);
+	size_t n_removed = 0;
+	for (auto &settings : m_callbacks) {
+		for (auto cb = settings.second.begin(); cb != settings.second.end();) {
+			if (cb->second == userdata) {
+				cb = settings.second.erase(cb);
+				n_removed++;
+			} else {
+				++cb;
+			}
+		}
 	}
+	return n_removed;
 }
 
 void Settings::removeSecureSettings()

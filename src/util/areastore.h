@@ -1,28 +1,11 @@
-/*
-Minetest
-Copyright (C) 2015 est31 <mtest31@outlook.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2015 est31 <mtest31@outlook.com>
 
 #pragma once
 
 #include "irr_v3d.h"
-#include "noise.h" // for PcgRandom
 #include <map>
-#include <list>
 #include <vector>
 #include <istream>
 #include "util/container.h"
@@ -32,7 +15,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #endif
 #if USE_SPATIAL
 	#include <spatialindex/SpatialIndex.h>
-	#include "util/serialize.h"
 #endif
 
 
@@ -77,16 +59,20 @@ public:
 	/// Stores output in passed vector.
 	void getAreasForPos(std::vector<Area *> *result, v3s16 pos);
 
+	/// Finds areas that are overlapping the area defined by the passed edges.
+	/// This finds any areas that intersect with the passed area at any point.
+	virtual void getOverlappingAreas(std::vector<Area *> *result,
+		v3s16 minedge, v3s16 maxedge) = 0;
+
 	/// Finds areas that are completely contained inside the area defined
-	/// by the passed edges.  If @p accept_overlap is true this finds any
-	/// areas that intersect with the passed area at any point.
-	virtual void getAreasInArea(std::vector<Area *> *result,
-		v3s16 minedge, v3s16 maxedge, bool accept_overlap) = 0;
+	/// by the passed edges.
+	virtual void getContainingAreas(std::vector<Area *> *result,
+		v3s16 minedge, v3s16 maxedge) = 0;
 
 	/// Sets cache parameters.
 	void setCacheParams(bool enabled, u8 block_radius, size_t limit);
 
-	/// Returns a pointer to the area coresponding to the passed ID,
+	/// Returns a pointer to the area corresponding to the passed ID,
 	/// or NULL if it doesn't exist.
 	const Area *getArea(u32 id) const;
 
@@ -130,14 +116,14 @@ private:
 
 class VectorAreaStore : public AreaStore {
 public:
-	virtual void reserve(size_t count) { m_areas.reserve(count); }
-	virtual bool insertArea(Area *a);
-	virtual bool removeArea(u32 id);
-	virtual void getAreasInArea(std::vector<Area *> *result,
-		v3s16 minedge, v3s16 maxedge, bool accept_overlap);
+	void reserve(size_t count) override { m_areas.reserve(count); }
+	bool insertArea(Area *a) override;
+	bool removeArea(u32 id) override;
+	void getOverlappingAreas(std::vector<Area *> *result, v3s16 minedge, v3s16 maxedge) override;
+	void getContainingAreas(std::vector<Area *> *result, v3s16 minedge, v3s16 maxedge) override;
 
 protected:
-	virtual void getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos);
+	void getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos) override;
 
 private:
 	std::vector<Area *> m_areas;
@@ -151,13 +137,13 @@ public:
 	SpatialAreaStore();
 	virtual ~SpatialAreaStore();
 
-	virtual bool insertArea(Area *a);
-	virtual bool removeArea(u32 id);
-	virtual void getAreasInArea(std::vector<Area *> *result,
-		v3s16 minedge, v3s16 maxedge, bool accept_overlap);
+	bool insertArea(Area *a) override;
+	bool removeArea(u32 id) override;
+	void getOverlappingAreas(std::vector<Area *> *result, v3s16 minedge, v3s16 maxedge) override;
+	void getContainingAreas(std::vector<Area *> *result, v3s16 minedge, v3s16 maxedge) override;
 
 protected:
-	virtual void getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos);
+	void getAreasForPosImpl(std::vector<Area *> *result, v3s16 pos) override;
 
 private:
 	SpatialIndex::ISpatialIndex *m_tree = nullptr;
@@ -177,7 +163,7 @@ private:
 		{
 			u32 id = in.getIdentifier();
 
-			std::map<u32, Area>::iterator itr = m_store->areas_map.find(id);
+			auto itr = m_store->areas_map.find(id);
 			assert(itr != m_store->areas_map.end());
 			m_result->push_back(&itr->second);
 		}
